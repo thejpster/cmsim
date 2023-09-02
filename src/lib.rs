@@ -3,13 +3,11 @@
 //! Designed to run on `no_std` systems (although at the moment it's full of
 //! println! calls).
 
-use core::num::Wrapping;
-
 /// All the ways we can fail to execute code
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     InvalidAddress,
-    InvalidInstruction,
+    InvalidInstruction(u16),
     UnalignedAccess,
     NonThumbPc,
 }
@@ -96,26 +94,30 @@ pub trait Memory {
 
 impl Memory for [u32] {
     fn load_u32(&self, addr: u32) -> Result<u32, Error> {
-        self.get(addr as usize)
+        self.get(addr as usize >> 2)
             .copied()
             .ok_or(Error::InvalidAddress)
     }
 
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), Error> {
-        *self.get_mut(addr as usize).ok_or(Error::InvalidAddress)? = value;
+        *self
+            .get_mut(addr as usize >> 2)
+            .ok_or(Error::InvalidAddress)? = value;
         Ok(())
     }
 }
 
 impl<const N: usize> Memory for [u32; N] {
     fn load_u32(&self, addr: u32) -> Result<u32, Error> {
-        self.get(addr as usize)
+        self.get(addr as usize >> 2)
             .copied()
             .ok_or(Error::InvalidAddress)
     }
 
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), Error> {
-        *self.get_mut(addr as usize).ok_or(Error::InvalidAddress)? = value;
+        *self
+            .get_mut(addr as usize >> 2)
+            .ok_or(Error::InvalidAddress)? = value;
         Ok(())
     }
 }
@@ -133,8 +135,10 @@ impl<const N: usize> Memory for [u32; N] {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     Branch { imm11: u16 },
-    Movs { rd: u8, imm8: u8 },
+    MovImm { rd: Register, imm8: u8 },
+    MovRegT1 { rm: Register, rd: Register },
     Breakpoint { imm8: u8 },
+    LdrLiteral { rt: Register, imm8: u8 },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -157,16 +161,41 @@ pub enum Register {
     Pc,
 }
 
+impl From<u8> for Register {
+    fn from(value: u8) -> Self {
+        match value & 0x0F {
+            0 => Register::R0,
+            1 => Register::R1,
+            2 => Register::R2,
+            3 => Register::R3,
+            4 => Register::R4,
+            5 => Register::R5,
+            6 => Register::R6,
+            7 => Register::R7,
+            8 => Register::R8,
+            9 => Register::R9,
+            10 => Register::R10,
+            11 => Register::R11,
+            12 => Register::R12,
+            13 => Register::Sp,
+            14 => Register::Lr,
+            _ => Register::Pc,
+        }
+    }
+}
+
 /// Represents the core of an ARMv6-M compatible processor, like a Cortex-M0.
 ///
 /// Contains the registers, stack pointer, program counter, and flags.
 #[derive(Debug, Default, Clone)]
 pub struct Armv6M {
-    regs: [Wrapping<u32>; 13],
-    sp: Wrapping<u32>,
-    lr: Wrapping<u32>,
-    pc: Wrapping<u32>,
+    regs: [u32; 13],
+    sp: u32,
+    lr: u32,
+    pc: u32,
     breakpoint: Option<u8>,
+    flag_zero: bool,
+    flag_negative: bool,
 }
 
 impl Armv6M {
@@ -176,8 +205,8 @@ impl Armv6M {
     /// Counter, which you must supply.
     pub fn new(sp: u32, pc: u32) -> Armv6M {
         Armv6M {
-            sp: Wrapping(sp),
-            pc: Wrapping(pc),
+            sp,
+            pc,
             ..Default::default()
         }
     }
@@ -185,22 +214,22 @@ impl Armv6M {
     /// Get the contents of a register
     pub fn register(&self, reg: Register) -> u32 {
         match reg {
-            Register::R0 => self.regs[0].0,
-            Register::R1 => self.regs[1].0,
-            Register::R2 => self.regs[2].0,
-            Register::R3 => self.regs[3].0,
-            Register::R4 => self.regs[4].0,
-            Register::R5 => self.regs[5].0,
-            Register::R6 => self.regs[6].0,
-            Register::R7 => self.regs[7].0,
-            Register::R8 => self.regs[8].0,
-            Register::R9 => self.regs[9].0,
-            Register::R10 => self.regs[10].0,
-            Register::R11 => self.regs[11].0,
-            Register::R12 => self.regs[12].0,
-            Register::Lr => self.lr.0,
-            Register::Sp => self.sp.0,
-            Register::Pc => self.pc.0,
+            Register::R0 => self.regs[0],
+            Register::R1 => self.regs[1],
+            Register::R2 => self.regs[2],
+            Register::R3 => self.regs[3],
+            Register::R4 => self.regs[4],
+            Register::R5 => self.regs[5],
+            Register::R6 => self.regs[6],
+            Register::R7 => self.regs[7],
+            Register::R8 => self.regs[8],
+            Register::R9 => self.regs[9],
+            Register::R10 => self.regs[10],
+            Register::R11 => self.regs[11],
+            Register::R12 => self.regs[12],
+            Register::Lr => self.lr,
+            Register::Sp => self.sp,
+            Register::Pc => self.pc,
         }
     }
 
@@ -208,17 +237,17 @@ impl Armv6M {
     pub fn step(&mut self, memory: &mut dyn Memory) -> Result<(), Error> {
         let instruction = self.fetch(memory)?;
         println!("Got {:?}", instruction);
-        self.execute(instruction, memory);
+        self.execute(instruction, memory)?;
         Ok(())
     }
 
     /// Fetch an instruction from memory and decode it.
     pub fn fetch(&self, memory: &dyn Memory) -> Result<Instruction, Error> {
-        if self.pc.0 & 1 != 1 {
+        if self.pc & 1 != 1 {
             return Err(Error::NonThumbPc);
         }
-        let word = memory.load_u16(self.pc.0 & !1)?;
-        println!("Loaded 0x{:04x} from 0x{:08x}", word, self.pc.0 & !1);
+        let word = memory.load_u16(self.pc & !1)?;
+        println!("Loaded 0x{:04x} from 0x{:08x}", word, self.pc & !1);
         Self::decode(word)
     }
 
@@ -228,39 +257,129 @@ impl Armv6M {
     /// that. Probably with some `decode32` function.
     pub fn decode(word: u16) -> Result<Instruction, Error> {
         if (word >> 11) == 0b00100 {
-            // MOV <rd>, #imm8
+            // MOV <Rd>,#<imm8>
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
-            Ok(Instruction::Movs { rd, imm8 })
+            Ok(Instruction::MovImm {
+                rd: Register::from(rd),
+                imm8,
+            })
         } else if (word >> 11) == 0b11100 {
             // B <location>
             Ok(Instruction::Branch {
                 imm11: word & 0x7FF,
             })
         } else if (word >> 8) == 0b10111110 {
-            Ok(Instruction::Breakpoint { imm8: word as u8 })
+            // BKPT #<imm8>
+            let imm8 = (word & 0xFF) as u8;
+            Ok(Instruction::Breakpoint { imm8 })
+        } else if (word >> 11) == 0b01001 {
+            // LDR <Rt>,#<imm8>
+            let imm8 = (word & 0xFF) as u8;
+            let rt = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::LdrLiteral {
+                rt: Register::from(rt),
+                imm8,
+            })
+        } else if (word >> 8) == 0b01000110 {
+            let d: u8 = ((word >> 7) & 0b1) as u8;
+            let rd = (d << 3) | (word & 0b111) as u8;
+            let rm: u8 = ((word >> 3) & 0x0F) as u8;
+            println!("{d} {rd} {rm}");
+            Ok(Instruction::MovRegT1 {
+                rm: Register::from(rm),
+                rd: Register::from(rd),
+            })
         } else {
-            Err(Error::InvalidInstruction)
+            Err(Error::InvalidInstruction(word))
         }
     }
 
     /// Execute an instruction.
-    pub fn execute(&mut self, instruction: Instruction, _memory: &mut dyn Memory) {
+    pub fn execute(
+        &mut self,
+        instruction: Instruction,
+        memory: &mut dyn Memory,
+    ) -> Result<(), Error> {
         self.breakpoint = None;
+        self.pc = self.pc.wrapping_add(2);
         match instruction {
-            Instruction::Movs { rd, imm8 } => {
-                self.pc += 2;
-                self.regs[rd as usize] = Wrapping(u32::from(imm8));
+            Instruction::MovImm { rd, imm8 } => {
+                // MOVS <Rd>,#<imm8>
+                let imm32 = u32::from(imm8);
+                self.store_reg(rd, imm32);
+                self.flag_zero = imm32 == 0;
+                self.flag_negative = imm32 & 0x8000_0000 != 0;
+            }
+            Instruction::MovRegT1 { rm, rd } => {
+                // MOV <Rd>,<Rm>
+                let value = self.fetch_reg(rm);
+                if rd == Register::Pc {
+                    self.store_reg(rd, value * 2);
+                } else {
+                    self.store_reg(rd, value);
+                }
             }
             Instruction::Branch { imm11 } => {
                 let imm32 = Self::sign_extend_imm11(imm11) << 1;
-                // Branch assumes pre-fetch has occurred, putting PC 4 ahead.
-                self.pc += 4;
-                self.pc += imm32 as u32;
+                // Assume's PC next increment has happened already
+                self.pc = self.pc.wrapping_add(2 + (imm32 as u32));
             }
             Instruction::Breakpoint { imm8 } => {
                 self.breakpoint = Some(imm8);
             }
+            Instruction::LdrLiteral { rt, imm8 } => {
+                let imm32 = u32::from(imm8) << 2;
+                // Assume's PC next increment has happened already
+                // Also align to 4 bytes
+                let base = (self.pc + 2) & !0b11;
+                let addr = base + imm32;
+                let value = memory.load_u32(addr)?;
+                self.store_reg(rt, value);
+            }
+        }
+        Ok(())
+    }
+
+    fn store_reg(&mut self, register: Register, value: u32) {
+        match register {
+            Register::R0 => self.regs[0] = value,
+            Register::R1 => self.regs[1] = value,
+            Register::R2 => self.regs[2] = value,
+            Register::R3 => self.regs[3] = value,
+            Register::R4 => self.regs[4] = value,
+            Register::R5 => self.regs[5] = value,
+            Register::R6 => self.regs[6] = value,
+            Register::R7 => self.regs[7] = value,
+            Register::R8 => self.regs[8] = value,
+            Register::R9 => self.regs[9] = value,
+            Register::R10 => self.regs[10] = value,
+            Register::R11 => self.regs[11] = value,
+            Register::R12 => self.regs[12] = value,
+            Register::Lr => self.lr = value,
+            Register::Sp => self.sp = value,
+            Register::Pc => self.pc = value,
+        }
+    }
+
+    fn fetch_reg(&mut self, register: Register) -> u32 {
+        match register {
+            Register::R0 => self.regs[0],
+            Register::R1 => self.regs[1],
+            Register::R2 => self.regs[2],
+            Register::R3 => self.regs[3],
+            Register::R4 => self.regs[4],
+            Register::R5 => self.regs[5],
+            Register::R6 => self.regs[6],
+            Register::R7 => self.regs[7],
+            Register::R8 => self.regs[8],
+            Register::R9 => self.regs[9],
+            Register::R10 => self.regs[10],
+            Register::R11 => self.regs[11],
+            Register::R12 => self.regs[12],
+            Register::Lr => self.lr,
+            Register::Sp => self.sp,
+            Register::Pc => self.pc,
         }
     }
 
@@ -347,7 +466,10 @@ mod test {
     #[test]
     fn mov_instruction() {
         assert_eq!(
-            Ok(Instruction::Movs { rd: 0, imm8: 64 }),
+            Ok(Instruction::MovImm {
+                rd: Register::R0,
+                imm8: 64
+            }),
             Armv6M::decode(0x2040)
         );
     }
@@ -366,9 +488,10 @@ mod test {
 
         let mut cpu = Armv6M::new(0, 8);
         let mut ram = [0u32; 6];
-        cpu.execute(Instruction::Branch { imm11: 0x7fe }, &mut ram);
+        cpu.execute(Instruction::Branch { imm11: 0x7fe }, &mut ram)
+            .unwrap();
         // PC was 8, PC is still 8, because `B 0x7FE` means branch to yourself
-        assert_eq!(cpu.pc.0, 8);
+        assert_eq!(cpu.pc, 8);
     }
 
     #[test]
@@ -377,6 +500,28 @@ mod test {
             Ok(Instruction::Breakpoint { imm8: 0xCC }),
             Armv6M::decode(0xbecc)
         );
+    }
+
+    #[test]
+    fn ldr_instruction() {
+        assert_eq!(
+            Ok(Instruction::LdrLiteral {
+                rt: Register::R0,
+                imm8: 1
+            }),
+            Armv6M::decode(0x4801)
+        )
+    }
+
+    #[test]
+    fn movregt1_instruction() {
+        assert_eq!(
+            Ok(Instruction::MovRegT1 {
+                rm: Register::R0,
+                rd: Register::Lr
+            }),
+            Armv6M::decode(0x4686)
+        )
     }
 }
 
