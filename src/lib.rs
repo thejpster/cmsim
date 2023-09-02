@@ -145,9 +145,9 @@ pub enum Condition {
     Hi = 8,
     /// Unsigned lower or same (C == 0 or Z == 1)
     Ls = 9,
-    /// Signed greater than or equal (N == N)
+    /// Signed greater than or equal (N == V)
     Ge = 10,
-    /// Signed less than (N != N)
+    /// Signed less than (N != V)
     Lt = 11,
     /// Signed greater than (Z == 0 and N == V)
     Gt = 12,
@@ -378,6 +378,13 @@ pub enum Instruction {
         /// The right hand register to compare
         rm: Register,
     },
+    /// `CMP <Rn>,#<imm>`
+    CmpImm {
+        /// The left hand register to compare
+        rn: Register,
+        /// The right hand immediate value to compare
+        imm32: u32,
+    },
     // =======================================================================
     // Other Instructions
     // =======================================================================
@@ -451,6 +458,7 @@ impl std::fmt::Display for Instruction {
             Instruction::Adds { rd, rn, imm3 } => write!(f, "ADDS {},{},#{}", rd, rn, imm3),
             Instruction::LslsImm { rd, rm, imm5 } => write!(f, "LSLS {},{},#{}", rd, rm, imm5),
             Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
+            Instruction::CmpImm { rn, imm32 } => write!(f, "CMP {},#{}", rn, imm32),
             Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{:02x}", imm8),
         }
     }
@@ -720,6 +728,13 @@ impl Armv6M {
                 rm: Register::from(rm),
                 imm5,
             })
+        } else if (word >> 11) == 0b00101 {
+            let imm8 = (word & 0xFF) as u8;
+            let rn = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::CmpImm {
+                rn: Register::from(rn),
+                imm32: u32::from(imm8),
+            })
         } else if (word >> 9) == 0b1011010 {
             let m = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
@@ -983,6 +998,14 @@ impl Armv6M {
                 self.set_c(carry);
                 self.set_v(overflow);
             }
+            Instruction::CmpImm { rn, imm32 } => {
+                let value_n = self.fetch_reg(rn);
+                let (result, carry, overflow) = Self::add_with_carry(value_n, !imm32, true);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry);
+                self.set_v(overflow);
+            }
             // =======================================================================
             // Other Instructions
             // =======================================================================
@@ -995,15 +1018,23 @@ impl Armv6M {
 
     /// Adds two 32-bit numbers, with carry in, producing a result, carry out, and overflow.
     fn add_with_carry(value1: u32, value2: u32, carry_in: bool) -> (u32, bool, bool) {
-        let (result, carry_out1) = value1.overflowing_add(value2);
-        let (result, carry_out2) = result.overflowing_add(if carry_in { 1 } else { 0 });
-        // Did we carry into the 32nd bit?
-        let carry_out = carry_out1 | carry_out2;
-        // You added two positive numbers but got a negative number
-        let overflow_out =
-            (value1 <= 0x7FFF_FFFF) && (value2 <= 0x7FFF_FFFF) && (result > 0x7FFF_FFFF);
+        let uv1 = u64::from(value1);
+        let uv2 = u64::from(value2);
+        let uv3: u64 = u64::from(carry_in);
+        let uresult = uv1.wrapping_add(uv2).wrapping_add(uv3);
+
+        let sv1 = i64::from(value1 as i32);
+        let sv2 = i64::from(value2 as i32);
+        let sv3: i64 = i64::from(carry_in);
+        let sresult = sv1.wrapping_add(sv2).wrapping_add(sv3);
+
+        let result = uresult as u32;
+
+        let carry_out = u64::from(result) != uresult;
+        let overflow_out = i64::from(result as i32) != sresult;
+
         println!(
-            "add_with_carry {:#x} + {:#x} + {} -> {:#x} {} {}",
+            "add_with_carry {:#x} + {:#x} + {} -> {:#x} c={} o={}",
             value1, value2, carry_in, result, carry_out, overflow_out
         );
         (result, carry_out, overflow_out)
@@ -1963,7 +1994,7 @@ mod test {
     // Logical Instructions
     // =======================================================================
     #[test]
-    fn compare_instruction() {
+    fn cmp_reg_instruction() {
         let i = Armv6M::decode(0x4288);
         assert_eq!(
             Ok(Instruction::CmpReg {
@@ -1976,24 +2007,153 @@ mod test {
     }
 
     #[test]
-    fn compare_operation() {
+    fn cmp_reg_operation() {
+        static TEST_VALUES: &[i32] = &[
+            i32::MIN,
+            i32::MIN + 1,
+            i32::MIN + 2,
+            i32::MIN / 2,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            i32::MAX / 2,
+            i32::MAX - 1,
+            i32::MAX,
+        ];
+        for x in TEST_VALUES.iter().copied() {
+            for y in TEST_VALUES.iter().copied() {
+                let ux = x as u32;
+                let uy = y as u32;
+                let sp = 16;
+                let mut cpu = Armv6M::new(sp, 0);
+                let mut ram = [0; 8];
+                cpu.regs[0] = ux;
+                cpu.regs[1] = uy;
+                cpu.execute(
+                    Instruction::CmpReg {
+                        rn: Register::R0,
+                        rm: Register::R1,
+                    },
+                    &mut ram,
+                )
+                .unwrap();
+                // C=1 & Z=0
+                assert_eq!(
+                    ux > uy,
+                    cpu.check_condition(Condition::Hi),
+                    "{:x} > {:x} (c={} n={} v={} z={})",
+                    ux,
+                    uy,
+                    cpu.is_c(),
+                    cpu.is_n(),
+                    cpu.is_v(),
+                    cpu.is_z()
+                );
+                // C=0 | Z=1
+                assert_eq!(
+                    ux <= uy,
+                    cpu.check_condition(Condition::Ls),
+                    "{:x} <= {:x} (c={} n={} v={} z={})",
+                    ux,
+                    uy,
+                    cpu.is_c(),
+                    cpu.is_n(),
+                    cpu.is_v(),
+                    cpu.is_z()
+                );
+                // Z=0 & N=V
+                assert_eq!(
+                    x > y as i32,
+                    cpu.check_condition(Condition::Gt),
+                    "{:x} > {:x} (c={} n={} v={} z={})",
+                    x,
+                    y,
+                    cpu.is_c(),
+                    cpu.is_n(),
+                    cpu.is_v(),
+                    cpu.is_z()
+                );
+                // Z=0 & N=V
+                assert_eq!(
+                    x >= y as i32,
+                    cpu.check_condition(Condition::Ge),
+                    "{:x} >= {:x} (c={} n={} v={} z={})",
+                    x,
+                    y,
+                    cpu.is_c(),
+                    cpu.is_n(),
+                    cpu.is_v(),
+                    cpu.is_z()
+                );
+                // N!=V
+                assert_eq!(
+                    x < y as i32,
+                    cpu.check_condition(Condition::Lt),
+                    "{:x} < {:x} (c={} n={} v={} z={})",
+                    x,
+                    y,
+                    cpu.is_c(),
+                    cpu.is_n(),
+                    cpu.is_v(),
+                    cpu.is_z()
+                );
+                // Z=1 | N!=V
+                assert_eq!(
+                    x <= y as i32,
+                    cpu.check_condition(Condition::Le),
+                    "{:x} <= {:x} (c={} n={} v={} z={})",
+                    x,
+                    y,
+                    cpu.is_c(),
+                    cpu.is_n(),
+                    cpu.is_v(),
+                    cpu.is_z()
+                );
+            }
+        }
+    }
+    #[test]
+    fn cmp_imm_instruction() {
+        let i = Armv6M::decode(0x2805);
+        assert_eq!(
+            Ok(Instruction::CmpImm {
+                rn: Register::R0,
+                imm32: 5,
+            }),
+            i
+        );
+        assert_eq!("CMP R0,#5", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn cmp_imm_operation() {
         let sp = 16;
         let mut cpu = Armv6M::new(sp, 0);
         let mut ram = [0; 8];
-        cpu.regs[0] = 0x2007815c;
-        cpu.regs[1] = 0x2007a0ac;
+        cpu.regs[0] = 100;
         cpu.execute(
-            Instruction::CmpReg {
+            Instruction::CmpImm {
                 rn: Register::R0,
-                rm: Register::R1,
+                // Must be zero-extended, not sign-extended
+                imm32: 50,
             },
             &mut ram,
         )
         .unwrap();
-        assert!(cpu.is_n());
-        assert!(!cpu.is_z());
-        assert!(!cpu.is_c());
-        assert!(!cpu.is_v());
+        // C=1 & Z=0
+        assert_eq!(100 > 50, cpu.check_condition(Condition::Hi));
+        // C=0 | Z=1
+        assert_eq!(100 <= 50, cpu.check_condition(Condition::Ls));
+        // Z=0 & N=V
+        assert_eq!(100 > 50, cpu.check_condition(Condition::Gt));
+        // Z=0 & N=V
+        assert_eq!(100 >= 50, cpu.check_condition(Condition::Ge));
+        // N!=V
+        assert_eq!(100 < 50, cpu.check_condition(Condition::Lt));
+        // Z=1 | N!=V
+        assert_eq!(100 <= 50, cpu.check_condition(Condition::Le));
     }
     // =======================================================================
     // Other Instructions
