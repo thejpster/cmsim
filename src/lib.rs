@@ -162,6 +162,8 @@ pub enum Instruction {
     SubSpImm { imm7: u8 },
     /// STR <Rt>,[SP,#<imm8>]
     StrImmT2 { rt: Register, imm8: u8 },
+    /// LDR <Rt>,[SP,#<imm8>]
+    LdrImmT2 { rt: Register, imm8: u8 }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -302,6 +304,13 @@ impl Armv6M {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::StrImmT2 {
+                rt: Register::from(rt),
+                imm8,
+            })
+        } else if (word >> 11) == 0b10011 {
+            let imm8 = (word & 0xFF) as u8;
+            let rt = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::LdrImmT2 {
                 rt: Register::from(rt),
                 imm8,
             })
@@ -476,6 +485,12 @@ impl Armv6M {
                 let offset_addr = self.sp.wrapping_add(imm32);
                 let value = self.fetch_reg(rt);
                 memory.store_u32(offset_addr, value)?;
+            }
+            Instruction::LdrImmT2 { rt, imm8 } => {
+                let imm32 = u32::from(imm8) << 2;
+                let offset_addr = self.sp.wrapping_add(imm32);
+                let value = memory.load_u32(offset_addr)?;
+                self.store_reg(rt, value);
             }
         }
         Ok(())
@@ -831,6 +846,33 @@ mod test {
         )
         .unwrap();
         assert_eq!(ram[((sp as usize) / 4) + 2], 0x12345678);
+    }
+
+    #[test]
+    fn ldr_imm_t2_instruction() {
+        assert_eq!(
+            Ok(Instruction::LdrImmT2 {
+                rt: Register::R1,
+                imm8: 2
+            }),
+            Armv6M::decode(0x9902)
+        );
+    }
+
+    #[test]
+    fn ldr_imm_t2_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0, 0, 0, 0, 0, 0, 0x12345678, 0];
+        cpu.execute(
+            Instruction::LdrImmT2 {
+                rt: Register::R1,
+                imm8: 2,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x12345678, cpu.regs[1]);
     }
 }
 

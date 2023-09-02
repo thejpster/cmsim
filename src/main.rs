@@ -40,7 +40,7 @@ impl cmsim::Memory for System {
         if addr < 0x2000_0000 {
             self.flash.load_u32(addr)
         } else {
-            self.ram.load_u32(addr)
+            self.ram.load_u32(addr - 0x2000_0000)
         }
     }
 
