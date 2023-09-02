@@ -11,7 +11,7 @@ pub enum Error {
     InvalidAddress,
     InvalidInstruction,
     UnalignedAccess,
-    NonThumbPc
+    NonThumbPc,
 }
 
 /// Describes a block of 32-bit memory.
@@ -132,8 +132,8 @@ impl<const N: usize> Memory for [u32; N] {
 /// BL, DMB, DSB, ISB, MRS, MSR
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
-    Branch { imm11: i16 },
-    Mov { rd: u8, imm8: u8 },
+    Branch { imm11: u16 },
+    Movs { rd: u8, imm8: u8 },
 }
 
 /// Represents the core of an ARMv6-M compatible processor, like a Cortex-M0.
@@ -187,15 +187,16 @@ impl Armv6M {
         println!("Opcode is 0b{:05b}", opcode);
         match opcode {
             0b00100 => {
-                // MOV
+                // MOV <rd>, #imm8
                 let imm8 = (word & 0xFF) as u8;
                 let rd = ((word >> 8) & 0b111) as u8;
-                Ok(Instruction::Mov { rd, imm8 })
+                Ok(Instruction::Movs { rd, imm8 })
             }
             0b11100 => {
-                // B
-                let imm11 = Self::sign_extend_imm11((word & 0x3FF) << 1);
-                Ok(Instruction::Branch { imm11 })
+                // B <location>
+                Ok(Instruction::Branch {
+                    imm11: word & 0x7FF,
+                })
             }
             _ => Err(Error::InvalidInstruction),
         }
@@ -204,23 +205,27 @@ impl Armv6M {
     /// Execute an instruction.
     pub fn execute(&mut self, instruction: Instruction, _memory: &mut dyn Memory) {
         match instruction {
-            Instruction::Mov { rd, imm8 } => {
-                self.regs[rd as usize] = Wrapping(u32::from(imm8));
+            Instruction::Movs { rd, imm8 } => {
                 self.pc += 2;
+                self.regs[rd as usize] = Wrapping(u32::from(imm8));
             }
             Instruction::Branch { imm11 } => {
-                self.pc += i32::from(imm11) as u32;
+                let imm32 = Self::sign_extend_imm11(imm11) << 1;
+                // Branch assumes pre-fetch has occurred, putting PC 4 ahead.
+                self.pc += 4;
+                self.pc += imm32 as u32;
             }
         }
     }
 
-    /// Given a signed 11-bit value, sign-extend it up to an i16.
-    fn sign_extend_imm11(imm11: u16) -> i16 {
+    /// Given a signed 11-bit word offset, sign-extend it up to an i32 byte offset.
+    fn sign_extend_imm11(imm11: u16) -> i32 {
+        let imm11 = u32::from(imm11);
         if imm11 & 0x200 != 0 {
-            // Negative, so set upper bits
-            (imm11 | 0xFC00) as i16
+            // Top bit set, so negative, so set upper bits
+            (imm11 | 0xFFFF_FC00) as i32
         } else {
-            imm11 as i16
+            imm11 as i32
         }
     }
 }
@@ -228,6 +233,15 @@ impl Armv6M {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn sign_extend_imm11() {
+        assert_eq!(-2, Armv6M::sign_extend_imm11(0x7FE));
+        assert_eq!(-1, Armv6M::sign_extend_imm11(0x7FF));
+        assert_eq!(0, Armv6M::sign_extend_imm11(0));
+        assert_eq!(1, Armv6M::sign_extend_imm11(1));
+        assert_eq!(2, Armv6M::sign_extend_imm11(2));
+    }
 
     #[test]
     fn basic_memory() {
@@ -282,14 +296,29 @@ mod test {
 
     #[test]
     fn mov_instruction() {
-        assert_eq!(Ok(Instruction::Mov { rd: 0, imm8: 64 }), Armv6M::decode(0x2040));
+        assert_eq!(
+            Ok(Instruction::Movs { rd: 0, imm8: 64 }),
+            Armv6M::decode(0x2040)
+        );
     }
 
     #[test]
     fn branch_instruction() {
-        assert_eq!(Ok(Instruction::Branch { imm11: -2 }), Armv6M::decode(0xe7fe));
-        assert_eq!(Ok(Instruction::Branch { imm11: -4 }), Armv6M::decode(0xe7fc));
-        assert_eq!(Ok(Instruction::Branch { imm11: 4 }), Armv6M::decode(0xe001));
+        assert_eq!(
+            Ok(Instruction::Branch { imm11: 0x7fe }),
+            Armv6M::decode(0xe7fe)
+        );
+        assert_eq!(
+            Ok(Instruction::Branch { imm11: 0x7fc }),
+            Armv6M::decode(0xe7fc)
+        );
+        assert_eq!(Ok(Instruction::Branch { imm11: 1 }), Armv6M::decode(0xe001));
+
+        let mut cpu = Armv6M::new(0, 8);
+        let mut ram = [0u32; 6];
+        cpu.execute(Instruction::Branch { imm11: 0x7fe }, &mut ram);
+        // PC was 8, PC is still 8, because `B 0x7FE` means branch to yourself
+        assert_eq!(cpu.pc.0, 8);
     }
 }
 
