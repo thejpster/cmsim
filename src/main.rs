@@ -76,9 +76,11 @@ fn main() {
     println!("SP is 0x{:08x}, Reset is 0x{:08x}", sp, reset);
     let mut cpu = cmsim::Armv6M::new(sp, reset);
 
+    let mut steps = 0;
     loop {
         cpu.step(&mut system).unwrap();
-        println!("CPU:\n{:08x?}", cpu);
+        steps += 1;
+        println!("Steps {}, CPU:\n{:08x?}", steps, cpu);
         if let Some(arg) = cpu.breakpoint() {
             println!("Got breakpoint 0x{:02X}", arg);
             if arg == 0xAB {
