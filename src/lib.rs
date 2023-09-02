@@ -163,7 +163,9 @@ pub enum Instruction {
     /// STR <Rt>,[SP,#<imm8>]
     StrImmT2 { rt: Register, imm8: u8 },
     /// LDR <Rt>,[SP,#<imm8>]
-    LdrImmT2 { rt: Register, imm8: u8 }
+    LdrImmT2 { rt: Register, imm8: u8 },
+    /// CMP <Rn>,<Rm>
+    CmpReg { rm: Register, rn: Register },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -362,6 +364,13 @@ impl Armv6M {
         } else if (word >> 7) == 0b101100001 {
             let imm7 = (word & 0x7F) as u8;
             Ok(Instruction::SubSpImm { imm7 })
+        } else if (word >> 6) == 0b0100001010 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rn = (word & 0b111) as u8;
+            Ok(Instruction::CmpReg {
+                rm: Register::from(rm),
+                rn: Register::from(rn),
+            })
         } else {
             Err(Error::InvalidInstruction(word))
         }
@@ -491,6 +500,13 @@ impl Armv6M {
                 let offset_addr = self.sp.wrapping_add(imm32);
                 let value = memory.load_u32(offset_addr)?;
                 self.store_reg(rt, value);
+            }
+            Instruction::CmpReg { rm, rn } => {
+                let value_m = self.fetch_reg(rm);
+                let value_n = self.fetch_reg(rn);
+                self.flag_zero = value_m == value_n;
+                self.flag_negative = value_m < value_n;
+                // todo: self.flag_carry and self.flag_overflow?
             }
         }
         Ok(())
@@ -873,6 +889,49 @@ mod test {
         )
         .unwrap();
         assert_eq!(0x12345678, cpu.regs[1]);
+    }
+
+    #[test]
+    fn compare_instruction() {
+        assert_eq!(
+            Ok(Instruction::CmpReg {
+                rm: Register::R1,
+                rn: Register::R0,
+            }),
+            Armv6M::decode(0x4288)
+        );
+    }
+
+    #[test]
+    fn compare_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 100;
+        cpu.regs[1] = 200;
+        cpu.regs[2] = 200;
+        cpu.execute(
+            Instruction::CmpReg {
+                rm: Register::R0,
+                rn: Register::R1,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // 100 - 200
+        assert!(cpu.flag_negative);
+        assert!(!cpu.flag_zero);
+        cpu.execute(
+            Instruction::CmpReg {
+                rm: Register::R2,
+                rn: Register::R1,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // 200 - 200
+        assert!(!cpu.flag_negative);
+        assert!(cpu.flag_zero);
     }
 }
 
