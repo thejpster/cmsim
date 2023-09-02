@@ -368,6 +368,15 @@ pub enum Instruction {
         /// How many bits to shift
         imm5: u8,
     },
+    /// `LSRS <Rx>,<Rx>,#<imm>`
+    LsrsImm {
+        /// Which register to store the result in
+        rd: Register,
+        /// Which register to get the value from
+        rm: Register,
+        /// How many bits to shift
+        imm5: u8,
+    },
     // =======================================================================
     // Logical Instructions
     // =======================================================================
@@ -457,6 +466,7 @@ impl std::fmt::Display for Instruction {
             Instruction::StrSpImm { rt, imm32 } => write!(f, "STR {},[SP,#{}]", rt, imm32),
             Instruction::Adds { rd, rn, imm3 } => write!(f, "ADDS {},{},#{}", rd, rn, imm3),
             Instruction::LslsImm { rd, rm, imm5 } => write!(f, "LSLS {},{},#{}", rd, rm, imm5),
+            Instruction::LsrsImm { rd, rm, imm5 } => write!(f, "LSRS {},{},#{}", rd, rm, imm5),
             Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
             Instruction::CmpImm { rn, imm32 } => write!(f, "CMP {},#{}", rn, imm32),
             Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{:02x}", imm8),
@@ -728,6 +738,18 @@ impl Armv6M {
                 rm: Register::from(rm),
                 imm5,
             })
+        } else if (word >> 11) == 0b00001 {
+            let mut imm5 = ((word >> 6) & 0x1F) as u8;
+            if imm5 == 0 {
+                imm5 = 32;
+            }
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::LsrsImm {
+                rd: Register::from(rd),
+                rm: Register::from(rm),
+                imm5,
+            })
         } else if (word >> 11) == 0b00101 {
             let imm8 = (word & 0xFF) as u8;
             let rn = ((word >> 8) & 0b111) as u8;
@@ -981,6 +1003,16 @@ impl Armv6M {
                     let shifted = wide_value << shift_n;
                     (shifted as u32, (shifted & (1 << 32)) != 0)
                 };
+                self.store_reg(rd, result);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+            }
+            Instruction::LsrsImm { rd, rm, imm5 } => {
+                let value = self.fetch_reg(rm);
+                let shift_n = u32::from(imm5);
+                let result = value >> shift_n;
+                let carry_out = (value & (1 << (shift_n - 1))) != 0;
                 self.store_reg(rd, result);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
@@ -1984,6 +2016,42 @@ mod test {
         )
         .unwrap();
         assert_eq!(0x23456780, cpu.regs[0]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+    #[test]
+    fn lsrs_instruction() {
+        let i = Armv6M::decode(0x0881);
+        // lsrs	r1, r0, #2
+        assert_eq!(
+            Ok(Instruction::LsrsImm {
+                rd: Register::R1,
+                rm: Register::R0,
+                imm5: 2
+            }),
+            i
+        );
+        assert_eq!("LSRS R1,R0,#2", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn lsrs_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram: [u32; 8] = [0; 8];
+        cpu.regs[1] = 0x12345678;
+        cpu.execute(
+            Instruction::LsrsImm {
+                rd: Register::R0,
+                rm: Register::R1,
+                imm5: 4,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x01234567, cpu.regs[0]);
         assert!(!cpu.is_n());
         assert!(!cpu.is_z());
         assert!(cpu.is_c());
