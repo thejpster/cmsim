@@ -352,7 +352,15 @@ pub enum Instruction {
     // =======================================================================
     // Arithmetic Instructions
     // =======================================================================
-    // TBC
+    /// ADDS <Rd>,<Rn>,#<imm3>
+    Adds {
+        /// Which register to store the result in
+        rd: Register,
+        /// Which register to get the value from
+        rn: Register,
+        /// How much to add to <Rn>
+        imm3: u8,
+    },
     // =======================================================================
     // Logical Instructions
     // =======================================================================
@@ -414,6 +422,7 @@ impl std::fmt::Display for Instruction {
             Instruction::SubSpImm { imm32 } => write!(f, "SUB SP,#{}", imm32),
             Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
             Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{:02x}", imm8),
+            Instruction::Adds { rd, rn, imm3 } => write!(f, "ADDS {},{},#{}", rd, rn, imm3),
         }
     }
 }
@@ -668,6 +677,15 @@ impl Armv6M {
             let m = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
             Ok(Instruction::Push { register_list, m })
+        } else if (word >> 9) == 0b0001110 {
+            let imm3 = ((word >> 6) & 0x07) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::Adds {
+                rd: Register::from(rd),
+                rn: Register::from(rn),
+                imm3,
+            })
         } else if (word >> 8) == 0b10111110 {
             let imm8 = (word & 0xFF) as u8;
             Ok(Instruction::Breakpoint { imm8 })
@@ -851,6 +869,16 @@ impl Armv6M {
                 let offset_addr = addr.wrapping_add(imm32);
                 let value = self.fetch_reg(rt);
                 memory.store_u32(offset_addr, value)?;
+            }
+            Instruction::Adds { rd, rn, imm3 } => {
+                let value1 = self.fetch_reg(rn);
+                let value2 = u32::from(imm3);
+                let (result, carry, overflow) = Self::add_with_carry(value1, value2, false);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry);
+                self.set_v(overflow);
+                self.store_reg(rd, result);
             }
         }
         Ok(())
@@ -1476,6 +1504,41 @@ mod test {
         .unwrap();
         // R1 written to address 4 + (1 * 4) = 8
         assert_eq!([0, 0, 0x12345678, 0, 0, 0, 0, 0], ram);
+    }
+
+    #[test]
+    fn adds_instruction() {
+        assert_eq!(
+            Ok(Instruction::Adds {
+                rd: Register::R0,
+                rn: Register::R0,
+                imm3: 4
+            }),
+            Armv6M::decode(0x1d00)
+        );
+    }
+
+    #[test]
+    fn adds_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[1] = 0x12345678;
+        cpu.execute(
+            Instruction::Adds {
+                rd: Register::R0,
+                rn: Register::R1,
+                imm3: 1,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x12345679, cpu.regs[0]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(!cpu.is_c());
+        assert!(!cpu.is_v());
     }
 }
 
