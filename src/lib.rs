@@ -156,6 +156,8 @@ pub enum Instruction {
     AddSpT1 { rd: Register, imm8: u8 },
     /// BL <label>
     BranchLink { s_imm10: u16, j1_1_j2_imm11: u16 },
+    /// BX <Rm>
+    BranchExchange { rm: Register },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -201,6 +203,16 @@ impl From<u8> for Register {
     }
 }
 
+/// CPU execution modes
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Executing an exception or interrupt handler
+    #[default]
+    Handler,
+    /// Not executing an exception or interrupt handler
+    Thread,
+}
+
 /// Represents the core of an ARMv6-M compatible processor, like a Cortex-M0.
 ///
 /// Contains the registers, stack pointer, program counter, and flags.
@@ -213,6 +225,7 @@ pub struct Armv6M {
     breakpoint: Option<u8>,
     flag_zero: bool,
     flag_negative: bool,
+    mode: Mode,
 }
 
 impl Armv6M {
@@ -321,6 +334,11 @@ impl Armv6M {
                 rm: Register::from(rm),
                 rd: Register::from(rd),
             })
+        } else if (word >> 7) == 0b010001110 {
+            let rm = ((word >> 3) & 0x0F) as u8;
+            Ok(Instruction::BranchExchange {
+                rm: Register::from(rm),
+            })
         } else {
             Err(Error::InvalidInstruction(word))
         }
@@ -420,6 +438,18 @@ impl Armv6M {
                 let old_pc = self.pc.wrapping_add(2);
                 self.lr = (old_pc & !1) | 1;
                 self.pc = old_pc.wrapping_add(imm32);
+            }
+            Instruction::BranchExchange { rm } => {
+                let addr = self.fetch_reg(rm);
+                if self.mode == Mode::Handler && (addr >> 28) == 0b1111 {
+                    // Return from Exception
+                    todo!()
+                } else if addr & 1 == 0 {
+                    // Generate a hardfault on the next instruction
+                    todo!()
+                } else {
+                    self.pc = addr & !1;
+                }
             }
         }
         Ok(())
@@ -707,8 +737,28 @@ mod test {
             &mut ram,
         )
         .unwrap();
-        assert_eq!(start_pc + 4, cpu.lr);
-        assert_eq!(0x4ad50, cpu.pc);
+        assert_eq!(start_pc + 5, cpu.lr);
+        assert_eq!(0x4ad56, cpu.pc);
+    }
+
+    #[test]
+    fn branch_exchange_instruction() {
+        assert_eq!(
+            Ok(Instruction::BranchExchange { rm: Register::Lr }),
+            Armv6M::decode(0x4770)
+        );
+    }
+
+    #[test]
+    fn branch_exchange_operation() {
+        let sp = 32;
+        let start_pc = 0xd0;
+        let mut cpu = Armv6M::new(sp, start_pc);
+        cpu.lr = 0x0000_1235;
+        let mut ram = [15; 8];
+        cpu.execute(Instruction::BranchExchange { rm: Register::Lr }, &mut ram)
+            .unwrap();
+        assert_eq!(0x0000_1234, cpu.pc);
     }
 }
 
