@@ -323,6 +323,13 @@ pub enum Instruction {
         /// Also push LR
         m: bool,
     },
+    /// `POP {<register list>}`
+    Pop {
+        /// A bitmask of registers (R7 to R0) to pop
+        register_list: u8,
+        /// Also pop LR
+        p: bool,
+    },
     /// `ADD <Rd>,SP,#<imm8>`
     AddSpT1 {
         /// Which register to store the result in
@@ -386,7 +393,7 @@ impl std::fmt::Display for Instruction {
             Instruction::StrImm { rt, rn, imm32 } => write!(f, "STR {},[{},#{}]", rt, rn, imm32),
             Instruction::StrbImm { rt, rn, imm5 } => write!(f, "STRB {},[{},#{}]", rt, rn, imm5),
             Instruction::StrImmSp { rt, imm32 } => write!(f, "STR {},[SP,#{}]", rt, imm32),
-            Instruction::LdrLiteral { rt, imm32 } => write!(f, "LDR {},#{}", rt, imm32),
+            Instruction::LdrLiteral { rt, imm32 } => write!(f, "LDR {},[PC,#{}]", rt, imm32),
             Instruction::LdrImmSp { rt, imm32 } => write!(f, "LDR {},[SP,#{}]", rt, imm32),
             Instruction::Push { register_list, m } => {
                 let mut first = true;
@@ -405,6 +412,26 @@ impl std::fmt::Display for Instruction {
                         write!(f, ",")?;
                     }
                     write!(f, "LR")?;
+                }
+                write!(f, "}}")
+            }
+            Instruction::Pop { register_list, p } => {
+                let mut first = true;
+                write!(f, "POP {{")?;
+                for register in [7, 6, 5, 4, 3, 2, 1, 0] {
+                    if (*register_list & 1 << register) != 0 {
+                        if !first {
+                            write!(f, ",")?;
+                        }
+                        first = false;
+                        write!(f, "R{}", register)?;
+                    }
+                }
+                if *p {
+                    if !first {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "PC")?;
                 }
                 write!(f, "}}")
             }
@@ -668,6 +695,10 @@ impl Armv6M {
             let m = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
             Ok(Instruction::Push { register_list, m })
+        } else if (word >> 9) == 0b1011110 {
+            let p = ((word >> 8) & 1) == 1;
+            let register_list = word as u8;
+            Ok(Instruction::Pop { register_list, p })
         } else if (word >> 9) == 0b0001110 {
             let imm3 = ((word >> 6) & 0x07) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
@@ -798,6 +829,17 @@ impl Armv6M {
                     }
                 }
             }
+            Instruction::Pop { register_list, p } => {
+                for register in [0, 1, 2, 3, 4, 5, 6, 7] {
+                    if (register_list & 1 << register) != 0 {
+                        let value = self.pop_stack(memory)?;
+                        self.store_reg(Register::from(register), value);
+                    }
+                }
+                if p {
+                    self.pc = self.pop_stack(memory)? & !1;
+                }
+            }
             Instruction::AddSpT1 { rd, imm32 } => {
                 let sp = self.sp;
                 let value = sp.wrapping_add(imm32);
@@ -919,6 +961,14 @@ impl Armv6M {
         memory.store_u32(sp, value)?;
         self.store_reg(Register::Sp, sp);
         Ok(())
+    }
+
+    /// Pop one value off the stack
+    fn pop_stack(&mut self, memory: &mut dyn Memory) -> Result<u32, Error> {
+        let value = memory.load_u32(self.sp)?;
+        println!("Popping {:08x} from {:08x}", value, self.sp);
+        self.store_reg(Register::Sp, self.sp + 4);
+        Ok(value)
     }
 
     /// Store a value into the given register
@@ -1202,7 +1252,7 @@ mod test {
             }),
             i
         );
-        assert_eq!("LDR R0,#4", format!("{}", i.unwrap()));
+        assert_eq!("LDR R0,[PC,#4]", format!("{}", i.unwrap()));
     }
 
     #[test]
@@ -1240,6 +1290,30 @@ mod test {
             i
         );
         assert_eq!("PUSH {R7,R6,R5,R4,R3,R2,R1,R0}", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn pop_instruction() {
+        let i = Armv6M::decode(0xbd80);
+        assert_eq!(
+            // Pop {LR, R7}
+            Ok(Instruction::Pop {
+                register_list: 0x80,
+                p: true
+            }),
+            i
+        );
+        assert_eq!("POP {R7,PC}", format!("{}", i.unwrap()));
+
+        let i = Armv6M::decode(0xBCFF);
+        assert_eq!(
+            Ok(Instruction::Pop {
+                register_list: 0xFF,
+                p: false
+            }),
+            i
+        );
+        assert_eq!("POP {R7,R6,R5,R4,R3,R2,R1,R0}", format!("{}", i.unwrap()));
     }
 
     #[test]
