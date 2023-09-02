@@ -6,10 +6,16 @@
 /// All the ways we can fail to execute code
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    /// Did not understand this memory address
     InvalidAddress(u32),
+    /// Did not understand this instruction
     InvalidInstruction(u16),
+    /// Did not understand this 32-bit instruction
+    InvalidInstruction32(u16, u16),
+    /// Attempted to read a 32-bit value with an address that did not end in `0b00`
     UnalignedAccess,
-    NonThumbPc,
+    /// Decoded a 32-bit instruction as a 16-bit instruction
+    WideInstruction,
 }
 
 /// Describes a block of 32-bit memory.
@@ -148,6 +154,8 @@ pub enum Instruction {
     Push { register_list: u8, m: bool },
     /// ADD <Rd>,SP,#<imm8>
     AddSpT1 { rd: Register, imm8: u8 },
+    /// BL <label>
+    BranchLink { s_imm10: u16, j1_1_j2_imm11: u16 },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -215,7 +223,8 @@ impl Armv6M {
     pub fn new(sp: u32, pc: u32) -> Armv6M {
         Armv6M {
             sp,
-            pc,
+            // Trim off the thumb bit - we don't care
+            pc: pc & !1,
             ..Default::default()
         }
     }
@@ -252,20 +261,27 @@ impl Armv6M {
 
     /// Fetch an instruction from memory and decode it.
     pub fn fetch(&self, memory: &dyn Memory) -> Result<Instruction, Error> {
-        if self.pc & 1 != 1 {
-            return Err(Error::NonThumbPc);
+        let word = memory.load_u16(self.pc)?;
+        println!("Loaded 0x{:04x} from 0x{:08x}", word, self.pc);
+        match Self::decode(word) {
+            Ok(i) => Ok(i),
+            Err(Error::WideInstruction) => {
+                let word2 = memory.load_u16(self.pc + 2)?;
+                Self::decode32(word, word2)
+            }
+            Err(e) => Err(e),
         }
-        let word = memory.load_u16(self.pc & !1)?;
-        println!("Loaded 0x{:04x} from 0x{:08x}", word, self.pc & !1);
-        Self::decode(word)
     }
 
     /// Decode a 16-bit word into an instruction.
     ///
-    /// Some instructions are made up of two 16-bit values - TODO how we handle
-    /// that. Probably with some `decode32` function.
+    /// Some instructions are made up of two 16-bit values - you will get
+    /// `Error::WideInstruction` if you try and decode half of one.
     pub fn decode(word: u16) -> Result<Instruction, Error> {
-        if (word >> 11) == 0b00100 {
+        if (word >> 11) == 0b11110 {
+            // This is a 32-bit BL <label>
+            Err(Error::WideInstruction)
+        } else if (word >> 11) == 0b00100 {
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::MovImm {
@@ -310,6 +326,21 @@ impl Armv6M {
         }
     }
 
+    /// Decode a 32-bit T2 instruction from two 16-bit words.
+    pub fn decode32(word1: u16, word2: u16) -> Result<Instruction, Error> {
+        if (word1 >> 11) == 0b11110 && (word2 >> 14) == 0b11 {
+            // Branch with Link
+            let s_imm10 = word1 & 0x7FF;
+            let j1_1_j2_imm11 = word2 & 0x3FFF;
+            Ok(Instruction::BranchLink {
+                s_imm10,
+                j1_1_j2_imm11,
+            })
+        } else {
+            Err(Error::InvalidInstruction32(word1, word2))
+        }
+    }
+
     /// Execute an instruction.
     pub fn execute(
         &mut self,
@@ -320,14 +351,12 @@ impl Armv6M {
         self.pc = self.pc.wrapping_add(2);
         match instruction {
             Instruction::MovImm { rd, imm8 } => {
-                // MOVS <Rd>,#<imm8>
                 let imm32 = u32::from(imm8);
                 self.store_reg(rd, imm32);
                 self.flag_zero = imm32 == 0;
                 self.flag_negative = imm32 & 0x8000_0000 != 0;
             }
             Instruction::MovRegT1 { rm, rd } => {
-                // MOV <Rd>,<Rm>
                 let value = self.fetch_reg(rm);
                 if rd == Register::Pc {
                     self.store_reg(rd, value * 2);
@@ -338,7 +367,8 @@ impl Armv6M {
             Instruction::Branch { imm11 } => {
                 let imm32 = Self::sign_extend_imm11(imm11) << 1;
                 // Assume's PC next increment has happened already
-                self.pc = self.pc.wrapping_add(2 + (imm32 as u32));
+                self.pc = self.pc.wrapping_add(2);
+                self.pc = self.pc.wrapping_add(imm32 as u32);
             }
             Instruction::Breakpoint { imm8 } => {
                 self.breakpoint = Some(imm8);
@@ -347,8 +377,8 @@ impl Armv6M {
                 let imm32 = u32::from(imm8) << 2;
                 // Assume's PC next increment has happened already
                 // Also align to 4 bytes
-                let base = (self.pc + 2) & !0b11;
-                let addr = base + imm32;
+                let base = (self.pc.wrapping_add(2)) & !0b11;
+                let addr = base.wrapping_add(imm32);
                 let value = memory.load_u32(addr)?;
                 self.store_reg(rt, value);
             }
@@ -369,6 +399,27 @@ impl Armv6M {
                 let imm32 = u32::from(imm8) << 2;
                 let value = sp.wrapping_add(imm32);
                 self.store_reg(rd, value);
+            }
+            Instruction::BranchLink {
+                s_imm10,
+                j1_1_j2_imm11,
+            } => {
+                // See ARMv6-M Architecture Rference Manual A6.7.13
+                let s_imm10 = u32::from(s_imm10);
+                let j1_1_j2_imm11 = u32::from(j1_1_j2_imm11);
+                let s = (s_imm10 >> 10) & 1;
+                let s_prefix = if s == 1 { 0xFFu32 << 24 } else { 0 };
+                let j1 = (j1_1_j2_imm11 >> 13) & 1;
+                let j2 = (j1_1_j2_imm11 >> 11) & 1;
+                let imm10 = s_imm10 & 0x3FF;
+                let imm11 = j1_1_j2_imm11 & 0x7FF;
+                let i1 = if j1 == s { 1 << 23 } else { 0 };
+                let i2 = if j2 == s { 1 << 22 } else { 0 };
+                let imm32 = s_prefix | i1 | i2 | (imm10 << 12) | (imm11 << 1);
+                // Assume the prefetch has occurred
+                let old_pc = self.pc.wrapping_add(2);
+                self.lr = (old_pc & !1) | 1;
+                self.pc = old_pc.wrapping_add(imm32);
             }
         }
         Ok(())
@@ -627,6 +678,37 @@ mod test {
         )
         .unwrap();
         assert_eq!(32 + 4 * 4, cpu.regs[0]);
+    }
+
+    #[test]
+    fn branch_link_instruction() {
+        assert_eq!(Err(Error::WideInstruction), Armv6M::decode(0xF04A));
+        assert_eq!(
+            Ok(Instruction::BranchLink {
+                s_imm10: 0x004A,
+                j1_1_j2_imm11: 0x3E41,
+            }),
+            Armv6M::decode32(0xF04A, 0xFE41)
+        );
+    }
+
+    #[test]
+    fn branch_link_operation() {
+        // d0:	f04a fe41 	bl	4ad56
+        let sp = 32;
+        let start_pc = 0xd0;
+        let mut cpu = Armv6M::new(sp, start_pc);
+        let mut ram = [15; 8];
+        cpu.execute(
+            Instruction::BranchLink {
+                s_imm10: 0x004A,
+                j1_1_j2_imm11: 0x3E41,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(start_pc + 4, cpu.lr);
+        assert_eq!(0x4ad50, cpu.pc);
     }
 }
 
