@@ -271,16 +271,16 @@ pub enum Instruction {
     },
     /// STR <Rt>,[SP,#<imm8>]
     StrImmT2 {
-        /// Which register to fetch the value from
+        /// Which register to contains the value to store
         rt: Register,
-        /// The 8-bit signed immediate value       
+        /// The offset to apply to the stack pointer   
         imm8: u8,
     },
     /// LDR <Rt>,[SP,#<imm8>]
     LdrImmT2 {
-        /// Which register to store the value in
+        /// Which register to store the loaded value in
         rt: Register,
-        /// The 8-bit signed immediate value       
+        /// The offset to apply to the stack pointer   
         imm8: u8,
     },
     /// CMP <Rn>,<Rm>
@@ -289,6 +289,15 @@ pub enum Instruction {
         rn: Register,
         /// The right hand register to compare
         rm: Register,
+    },
+    /// STRB <Rt>,[<Rn>,#<imm5>]
+    StrbImm {
+        /// Which register to contains the value to store
+        rt: Register,
+        /// Which register contains the address to store at
+        rn: Register,
+        /// What offset to apply to the storage address
+        imm5: u8,
     },
 }
 
@@ -493,6 +502,15 @@ impl Armv6M {
                 rt: Register::from(rt),
                 imm8,
             })
+        } else if (word >> 11) == 0b01110 {
+            let imm5 = ((word >> 6) & 0x1F) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::StrbImm {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                imm5: imm5,
+            })
         } else if (word >> 9) == 0b1011010 {
             let m = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
@@ -670,6 +688,13 @@ impl Armv6M {
                 self.set_z(result == 0);
                 self.set_c(carry);
                 self.set_v(overflow);
+            }
+            Instruction::StrbImm { rt, rn, imm5 } => {
+                let imm32 = u32::from(imm5);
+                let addr = self.fetch_reg(rn);
+                let offset_addr = addr.wrapping_add(imm32);
+                let value = self.fetch_reg(rt);
+                memory.store_u8(offset_addr, (value & 0xFF) as u8)?;
             }
         }
         Ok(())
@@ -1222,6 +1247,22 @@ mod test {
         assert!(!cpu.is_z());
         assert!(!cpu.is_c());
         assert!(!cpu.is_v());
+    }
+
+    // 11 70    strb r1,[r2,#0]
+    // 1110 0000 0001 0001
+    // 0111 0xxx xxnn nmmm
+
+    #[test]
+    fn strb_immediate_instruction() {
+        assert_eq!(
+            Ok(Instruction::StrbImm {
+                rt: Register::R1,
+                rn: Register::R2,
+                imm5: 0
+            }),
+            Armv6M::decode(0x7011)
+        );
     }
 }
 
