@@ -160,6 +160,8 @@ pub enum Instruction {
     BranchExchange { rm: Register },
     /// SUB SP, #<imm7>
     SubSpImm { imm7: u8 },
+    /// STR <Rt>,[SP,#<imm8>]
+    StrImmT2 { rt: Register, imm8: u8 },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -296,6 +298,13 @@ impl Armv6M {
         if (word >> 11) == 0b11110 {
             // This is a 32-bit BL <label>
             Err(Error::WideInstruction)
+        } else if (word >> 11) == 0b10010 {
+            let imm8 = (word & 0xFF) as u8;
+            let rt = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::StrImmT2 {
+                rt: Register::from(rt),
+                imm8,
+            })
         } else if (word >> 11) == 0b00100 {
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
@@ -461,6 +470,12 @@ impl Armv6M {
                 // This does a subtraction
                 let value = self.sp.wrapping_add(!imm32).wrapping_add(1);
                 self.sp = value;
+            }
+            Instruction::StrImmT2 { rt, imm8 } => {
+                let imm32 = u32::from(imm8) << 2;
+                let offset_addr = self.sp.wrapping_add(imm32);
+                let value = self.fetch_reg(rt);
+                memory.store_u32(offset_addr, value)?;
             }
         }
         Ok(())
@@ -788,6 +803,34 @@ mod test {
         cpu.execute(Instruction::SubSpImm { imm7: 16 }, &mut ram)
             .unwrap();
         assert_eq!(0x100 - (4 * 16), cpu.sp);
+    }
+
+    #[test]
+    fn str_imm_t2_instruction() {
+        assert_eq!(
+            Ok(Instruction::StrImmT2 {
+                rt: Register::R1,
+                imm8: 2
+            }),
+            Armv6M::decode(0x9102)
+        );
+    }
+
+    #[test]
+    fn str_imm_t2_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [15; 8];
+        cpu.regs[1] = 0x12345678;
+        cpu.execute(
+            Instruction::StrImmT2 {
+                rt: Register::R1,
+                imm8: 2,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(ram[((sp as usize) / 4) + 2], 0x12345678);
     }
 }
 
