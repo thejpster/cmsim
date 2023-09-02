@@ -339,6 +339,11 @@ pub enum Instruction {
         /// The increment for the stack pointer
         imm32: u32,
     },
+    /// ADD SP,#<imm11>
+    AddSpImm {
+        /// How much to add to the stack pointer
+        imm32: u32,
+    },
     /// SUB SP,#<imm7>
     SubSpImm {
         /// How much to subtract from the stack pointer
@@ -405,6 +410,7 @@ impl std::fmt::Display for Instruction {
                 write!(f, "}}")
             }
             Instruction::AddSpT1 { rd, imm32 } => write!(f, "ADD {},SP,#{}", rd, imm32),
+            Instruction::AddSpImm { imm32 } => write!(f, "ADD SP,#{}", imm32),
             Instruction::SubSpImm { imm32 } => write!(f, "SUB SP,#{}", imm32),
             Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
             Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{:02x}", imm8),
@@ -678,6 +684,11 @@ impl Armv6M {
             Ok(Instruction::BranchExchange {
                 rm: Register::from(rm),
             })
+        } else if (word >> 7) == 0b101100000 {
+            let imm7 = (word & 0x7F) as u8;
+            Ok(Instruction::AddSpImm {
+                imm32: u32::from(imm7) << 2,
+            })
         } else if (word >> 7) == 0b101100001 {
             let imm7 = (word & 0x7F) as u8;
             Ok(Instruction::SubSpImm {
@@ -800,6 +811,9 @@ impl Armv6M {
                 } else {
                     self.pc = addr & !1;
                 }
+            }
+            Instruction::AddSpImm { imm32 } => {
+                self.sp = self.sp.wrapping_add(imm32);
             }
             Instruction::SubSpImm { imm32 } => {
                 // This does a subtraction
@@ -1275,6 +1289,24 @@ mod test {
         cpu.execute(Instruction::BranchExchange { rm: Register::Lr }, &mut ram)
             .unwrap();
         assert_eq!(0x0000_1234, cpu.pc);
+    }
+
+    #[test]
+    fn add_sp_imm_instruction() {
+        assert_eq!(
+            Ok(Instruction::AddSpImm { imm32: 64 }),
+            Armv6M::decode(0xb010)
+        );
+    }
+
+    #[test]
+    fn add_sp_imm_operation() {
+        let sp = 0x100;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [15; 8];
+        cpu.execute(Instruction::AddSpImm { imm32: 64 }, &mut ram)
+            .unwrap();
+        assert_eq!(0x100 + 64, cpu.sp);
     }
 
     #[test]
