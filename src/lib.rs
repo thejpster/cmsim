@@ -158,6 +158,8 @@ pub enum Instruction {
     BranchLink { s_imm10: u16, j1_1_j2_imm11: u16 },
     /// BX <Rm>
     BranchExchange { rm: Register },
+    /// SUB SP, #<imm7>
+    SubSpImm { imm7: u8 },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -339,6 +341,9 @@ impl Armv6M {
             Ok(Instruction::BranchExchange {
                 rm: Register::from(rm),
             })
+        } else if (word >> 7) == 0b101100001 {
+            let imm7 = (word & 0x7F) as u8;
+            Ok(Instruction::SubSpImm { imm7 })
         } else {
             Err(Error::InvalidInstruction(word))
         }
@@ -402,7 +407,7 @@ impl Armv6M {
             }
             Instruction::Push { register_list, m } => {
                 if m {
-                    let lr = self.fetch_reg(Register::Lr);
+                    let lr = self.lr;
                     self.push_stack(lr, memory)?;
                 }
                 for register in [7, 6, 5, 4, 3, 2, 1, 0] {
@@ -413,7 +418,7 @@ impl Armv6M {
                 }
             }
             Instruction::AddSpT1 { rd, imm8 } => {
-                let sp = self.fetch_reg(Register::Sp);
+                let sp = self.sp;
                 let imm32 = u32::from(imm8) << 2;
                 let value = sp.wrapping_add(imm32);
                 self.store_reg(rd, value);
@@ -451,12 +456,18 @@ impl Armv6M {
                     self.pc = addr & !1;
                 }
             }
+            Instruction::SubSpImm { imm7 } => {
+                let imm32 = u32::from(imm7) << 2;
+                // This does a subtraction
+                let value = self.sp.wrapping_add(!imm32).wrapping_add(1);
+                self.sp = value;
+            }
         }
         Ok(())
     }
 
     fn push_stack(&mut self, value: u32, memory: &mut dyn Memory) -> Result<(), Error> {
-        let sp = self.fetch_reg(Register::Sp) - 4;
+        let sp = self.sp - 4;
         println!("Pushing {:08x} to {:08x}", value, sp);
         memory.store_u32(sp, value)?;
         self.store_reg(Register::Sp, sp);
@@ -759,6 +770,24 @@ mod test {
         cpu.execute(Instruction::BranchExchange { rm: Register::Lr }, &mut ram)
             .unwrap();
         assert_eq!(0x0000_1234, cpu.pc);
+    }
+
+    #[test]
+    fn sub_sp_imm_instruction() {
+        assert_eq!(
+            Ok(Instruction::SubSpImm { imm7: 16 }),
+            Armv6M::decode(0xb090)
+        );
+    }
+
+    #[test]
+    fn sub_sp_imm_operation() {
+        let sp = 0x100;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [15; 8];
+        cpu.execute(Instruction::SubSpImm { imm7: 16 }, &mut ram)
+            .unwrap();
+        assert_eq!(0x100 - (4 * 16), cpu.sp);
     }
 }
 
