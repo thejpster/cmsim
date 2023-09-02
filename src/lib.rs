@@ -166,6 +166,32 @@ pub enum Condition {
     Always = 15,
 }
 
+impl std::fmt::Display for Condition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Condition::Eq => "EQ",
+                Condition::Ne => "NE",
+                Condition::Cs => "CS",
+                Condition::Cc => "CC",
+                Condition::Mi => "MI",
+                Condition::Pl => "PL",
+                Condition::Vs => "VS",
+                Condition::Vc => "VC",
+                Condition::Hi => "HI",
+                Condition::Ls => "LS",
+                Condition::Ge => "GE",
+                Condition::Lt => "LT",
+                Condition::Gt => "GT",
+                Condition::Le => "LE",
+                Condition::Always => "",
+            }
+        )
+    }
+}
+
 impl From<u8> for Condition {
     fn from(value: u8) -> Condition {
         match value & 0x0F {
@@ -200,18 +226,43 @@ impl From<u8> for Condition {
 /// BL, DMB, DSB, ISB, MRS, MSR
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
+    // =======================================================================
+    // Branch Instructions
+    // =======================================================================
     /// B <label>
     Branch {
-        /// The 11-bit signed immediate value
-        imm11: u16,
+        /// The PC-relative signed offset.
+        ///
+        /// A value of -4 means jump to same location, because PC has been
+        /// incremented twice before this is executed.
+        imm32: i32,
     },
     /// B.xx <label>
     BranchConditional {
         /// The condition code (e.g. only branch if Zero)
         cond: Condition,
-        /// The 8-bit signed immediate value
-        imm8: u8,
+        /// The PC-relative signed offset.
+        ///
+        /// A value of -4 means jump to same location, because PC has been
+        /// incremented twice before this is executed.
+        imm32: i32,
     },
+    /// BL <label>
+    BranchLink {
+        /// The PC-relative signed offset.
+        ///
+        /// A value of -4 means jump to same location, because PC has been
+        /// incremented twice before this is executed.
+        imm32: i32,
+    },
+    /// BX <Rm>
+    BranchExchange {
+        /// Which register contains the new PC
+        rm: Register,
+    },
+    // =======================================================================
+    // Move Instructions
+    // =======================================================================
     /// MOV <Rd>,#<imm8>
     MovImm {
         /// Which register to move the value into
@@ -226,18 +277,54 @@ pub enum Instruction {
         /// Which register to move from
         rm: Register,
     },
-    /// BKPT <imm8>
-    Breakpoint {
-        /// The 8-bit signed immediate value
-        imm8: u8,
+    // =======================================================================
+    // Store Instructions
+    // =======================================================================
+    /// STR <Rt>,[<Rn>{,#<imm5>}]
+    StrImm {
+        /// Which register contains the value to store
+        rt: Register,
+        /// Which register contains the base address to store at
+        rn: Register,
+        /// What offset to apply to the base address
+        imm32: u32,
     },
+    /// STRB <Rt>,[<Rn>{,#<imm5>}]
+    StrbImm {
+        /// Which register contains the value to store
+        rt: Register,
+        /// Which register contains the address to store at
+        rn: Register,
+        /// What offset to apply to the storage address
+        imm5: u8,
+    },
+    /// STR <Rt>,[SP,#<imm8>]
+    StrImmSp {
+        /// Which register to contains the value to store
+        rt: Register,
+        /// The offset to apply to the stack pointer
+        imm32: u32,
+    },
+    // =======================================================================
+    // Load Instructions
+    // =======================================================================
     /// LDR <Rt>,#<imm8>
     LdrLiteral {
         /// Which register to move into
         rt: Register,
-        /// The 8-bit signed immediate value
-        imm8: u8,
+        /// The value to load
+        imm32: u32,
     },
+    /// LDR <Rt>,[SP,#<imm8>]
+    LdrImmSp {
+        /// Which register to store the loaded value in
+        rt: Register,
+        /// The offset to apply to the stack pointer
+        imm32: u32,
+    },
+    // =======================================================================
+    // Stack Instructions
+    // =======================================================================
     /// PUSH {<register list>}
     Push {
         /// A bitmask of registers (R7 to R0) to push
@@ -249,40 +336,21 @@ pub enum Instruction {
     AddSpT1 {
         /// Which register to store the result in
         rd: Register,
-        /// The 8-bit signed immediate value
-        imm8: u8,
+        /// The increment for the stack pointer
+        imm32: u32,
     },
-    /// BL <label>
-    BranchLink {
-        /// Branch argument from the first word
-        s_imm10: u16,
-        /// Branch argument from the second word
-        j1_1_j2_imm11: u16,
-    },
-    /// BX <Rm>
-    BranchExchange {
-        /// Which register contains the new PC
-        rm: Register,
-    },
-    /// SUB SP, #<imm7>
+    /// SUB SP,#<imm7>
     SubSpImm {
-        /// The 7-bit signed immediate value
-        imm7: u8,
+        /// How much to subtract from the stack pointer
+        imm32: u32,
     },
-    /// STR <Rt>,[SP,#<imm8>]
-    StrImmT2 {
-        /// Which register to contains the value to store
-        rt: Register,
-        /// The offset to apply to the stack pointer   
-        imm8: u8,
-    },
-    /// LDR <Rt>,[SP,#<imm8>]
-    LdrImmT2 {
-        /// Which register to store the loaded value in
-        rt: Register,
-        /// The offset to apply to the stack pointer   
-        imm8: u8,
-    },
+    // =======================================================================
+    // Arithmetic Instructions
+    // =======================================================================
+    // TBC
+    // =======================================================================
+    // Logical Instructions
+    // =======================================================================
     /// CMP <Rn>,<Rm>
     CmpReg {
         /// The left hand register to compare
@@ -290,15 +358,58 @@ pub enum Instruction {
         /// The right hand register to compare
         rm: Register,
     },
-    /// STRB <Rt>,[<Rn>,#<imm5>]
-    StrbImm {
-        /// Which register to contains the value to store
-        rt: Register,
-        /// Which register contains the address to store at
-        rn: Register,
-        /// What offset to apply to the storage address
-        imm5: u8,
+    // =======================================================================
+    // Other Instructions
+    // =======================================================================
+    /// BKPT <imm8>
+    Breakpoint {
+        /// The 8-bit signed immediate value
+        imm8: u8,
     },
+}
+
+impl std::fmt::Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instruction::Branch { imm32 } => write!(f, "B {:+#x}", *imm32 + 4),
+            Instruction::BranchConditional { cond, imm32 } => {
+                write!(f, "B{} {:+#x}", cond, *imm32 + 4)
+            }
+            Instruction::BranchLink { imm32 } => write!(f, "BL {:+#x}", *imm32 + 4),
+            Instruction::BranchExchange { rm } => write!(f, "BX {}", *rm),
+            Instruction::MovImm { rd, imm8 } => write!(f, "MOV {},#{}", rd, imm8),
+            Instruction::MovRegT1 { rd, rm } => write!(f, "MOV {},{}", rd, rm),
+            Instruction::StrImm { rt, rn, imm32 } => write!(f, "STR {},[{},#{}]", rt, rn, imm32),
+            Instruction::StrbImm { rt, rn, imm5 } => write!(f, "STRB {},[{},#{}]", rt, rn, imm5),
+            Instruction::StrImmSp { rt, imm32 } => write!(f, "STR {},[SP,#{}]", rt, imm32),
+            Instruction::LdrLiteral { rt, imm32 } => write!(f, "LDR {},#{}", rt, imm32),
+            Instruction::LdrImmSp { rt, imm32 } => write!(f, "LDR {},[SP,#{}]", rt, imm32),
+            Instruction::Push { register_list, m } => {
+                let mut first = true;
+                write!(f, "PUSH {{")?;
+                for register in [7, 6, 5, 4, 3, 2, 1, 0] {
+                    if (*register_list & 1 << register) != 0 {
+                        if !first {
+                            write!(f, ",")?;
+                        }
+                        first = false;
+                        write!(f, "R{}", register)?;
+                    }
+                }
+                if *m {
+                    if !first {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "LR")?;
+                }
+                write!(f, "}}")
+            }
+            Instruction::AddSpT1 { rd, imm32 } => write!(f, "ADD {},SP,#{}", rd, imm32),
+            Instruction::SubSpImm { imm32 } => write!(f, "SUB SP,#{}", imm32),
+            Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
+            Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{:02x}", imm8),
+        }
+    }
 }
 
 /// Identifies a register in our CPU
@@ -336,6 +447,33 @@ pub enum Register {
     Sp,
     /// Program Counter
     Pc,
+}
+
+impl std::fmt::Display for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Register::R0 => "R0",
+                Register::R1 => "R1",
+                Register::R2 => "R2",
+                Register::R3 => "R3",
+                Register::R4 => "R4",
+                Register::R5 => "R5",
+                Register::R6 => "R6",
+                Register::R7 => "R7",
+                Register::R8 => "R8",
+                Register::R9 => "R9",
+                Register::R10 => "R1",
+                Register::R11 => "R1",
+                Register::R12 => "R1",
+                Register::Lr => "LR",
+                Register::Sp => "SP",
+                Register::Pc => "PC",
+            }
+        )
+    }
 }
 
 impl From<u8> for Register {
@@ -429,7 +567,7 @@ impl Armv6M {
     /// Fetch, Decode and Execute one instruction.
     pub fn step(&mut self, memory: &mut dyn Memory) -> Result<(), Error> {
         let instruction = self.fetch(memory)?;
-        println!("Got {:?}", instruction);
+        println!("Got \"{}\" ({:?})", instruction, instruction);
         self.execute(instruction, memory)?;
         Ok(())
     }
@@ -458,7 +596,7 @@ impl Armv6M {
             let imm8 = word as u8;
             Ok(Instruction::BranchConditional {
                 cond: Condition::from(cond),
-                imm8,
+                imm32: Self::sign_extend_imm8(imm8) << 1,
             })
         } else if (word >> 11) == 0b11110 {
             // This is a 32-bit BL <label>
@@ -466,16 +604,16 @@ impl Armv6M {
         } else if (word >> 11) == 0b10010 {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
-            Ok(Instruction::StrImmT2 {
+            Ok(Instruction::StrImmSp {
                 rt: Register::from(rt),
-                imm8,
+                imm32: u32::from(imm8) << 2,
             })
         } else if (word >> 11) == 0b10011 {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
-            Ok(Instruction::LdrImmT2 {
+            Ok(Instruction::LdrImmSp {
                 rt: Register::from(rt),
-                imm8,
+                imm32: u32::from(imm8) << 2,
             })
         } else if (word >> 11) == 0b00100 {
             let imm8 = (word & 0xFF) as u8;
@@ -486,21 +624,21 @@ impl Armv6M {
             })
         } else if (word >> 11) == 0b11100 {
             Ok(Instruction::Branch {
-                imm11: word & 0x7FF,
+                imm32: Self::sign_extend_imm11(word & 0x7FF) << 1,
             })
         } else if (word >> 11) == 0b10101 {
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::AddSpT1 {
                 rd: Register::from(rd),
-                imm8,
+                imm32: u32::from(imm8) << 2,
             })
         } else if (word >> 11) == 0b01001 {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::LdrLiteral {
                 rt: Register::from(rt),
-                imm8,
+                imm32: u32::from(imm8) << 2,
             })
         } else if (word >> 11) == 0b01110 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
@@ -509,7 +647,16 @@ impl Armv6M {
             Ok(Instruction::StrbImm {
                 rt: Register::from(rt),
                 rn: Register::from(rn),
-                imm5: imm5,
+                imm5,
+            })
+        } else if (word >> 11) == 0b01100 {
+            let imm5 = ((word >> 6) & 0x1F) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::StrImm {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                imm32: u32::from(imm5) << 2,
             })
         } else if (word >> 9) == 0b1011010 {
             let m = ((word >> 8) & 1) == 1;
@@ -533,7 +680,9 @@ impl Armv6M {
             })
         } else if (word >> 7) == 0b101100001 {
             let imm7 = (word & 0x7F) as u8;
-            Ok(Instruction::SubSpImm { imm7 })
+            Ok(Instruction::SubSpImm {
+                imm32: u32::from(imm7) << 2,
+            })
         } else if (word >> 6) == 0b0100001010 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rn = (word & 0b111) as u8;
@@ -550,11 +699,20 @@ impl Armv6M {
     pub fn decode32(word1: u16, word2: u16) -> Result<Instruction, Error> {
         if (word1 >> 11) == 0b11110 && (word2 >> 14) == 0b11 {
             // Branch with Link
-            let s_imm10 = word1 & 0x7FF;
-            let j1_1_j2_imm11 = word2 & 0x3FFF;
+            // See ARMv6-M Architecture Rference Manual A6.7.13
+            let s_imm10 = u32::from(word1 & 0x7FF);
+            let j1_1_j2_imm11 = u32::from(word2 & 0x3FFF);
+            let s = (s_imm10 >> 10) & 1;
+            let s_prefix = if s == 1 { 0xFFu32 << 24 } else { 0 };
+            let j1 = (j1_1_j2_imm11 >> 13) & 1;
+            let j2 = (j1_1_j2_imm11 >> 11) & 1;
+            let imm10 = s_imm10 & 0x3FF;
+            let imm11 = j1_1_j2_imm11 & 0x7FF;
+            let i1 = if j1 == s { 1 << 23 } else { 0 };
+            let i2 = if j2 == s { 1 << 22 } else { 0 };
+            let imm32 = s_prefix | i1 | i2 | (imm10 << 12) | (imm11 << 1);
             Ok(Instruction::BranchLink {
-                s_imm10,
-                j1_1_j2_imm11,
+                imm32: imm32 as i32,
             })
         } else {
             Err(Error::InvalidInstruction32(word1, word2))
@@ -586,24 +744,21 @@ impl Armv6M {
                     self.store_reg(rd, value);
                 }
             }
-            Instruction::BranchConditional { cond, imm8 } => {
-                let imm32 = Self::sign_extend_imm8(imm8) << 1;
+            Instruction::BranchConditional { cond, imm32 } => {
                 if self.check_condition(cond) {
                     self.pc = self.pc.wrapping_add(2);
-                    self.pc = self.pc.wrapping_add(imm32);
+                    self.pc = self.pc.wrapping_add(imm32 as u32);
                 }
             }
-            Instruction::Branch { imm11 } => {
-                let imm32 = Self::sign_extend_imm11(imm11) << 1;
+            Instruction::Branch { imm32 } => {
                 // Assume's PC next increment has happened already
                 self.pc = self.pc.wrapping_add(2);
-                self.pc = self.pc.wrapping_add(imm32);
+                self.pc = self.pc.wrapping_add(imm32 as u32);
             }
             Instruction::Breakpoint { imm8 } => {
                 self.breakpoint = Some(imm8);
             }
-            Instruction::LdrLiteral { rt, imm8 } => {
-                let imm32 = u32::from(imm8) << 2;
+            Instruction::LdrLiteral { rt, imm32 } => {
                 // Assume's PC next increment has happened already
                 // Also align to 4 bytes
                 let base = (self.pc.wrapping_add(2)) & !0b11;
@@ -623,32 +778,16 @@ impl Armv6M {
                     }
                 }
             }
-            Instruction::AddSpT1 { rd, imm8 } => {
+            Instruction::AddSpT1 { rd, imm32 } => {
                 let sp = self.sp;
-                let imm32 = u32::from(imm8) << 2;
                 let value = sp.wrapping_add(imm32);
                 self.store_reg(rd, value);
             }
-            Instruction::BranchLink {
-                s_imm10,
-                j1_1_j2_imm11,
-            } => {
-                // See ARMv6-M Architecture Rference Manual A6.7.13
-                let s_imm10 = u32::from(s_imm10);
-                let j1_1_j2_imm11 = u32::from(j1_1_j2_imm11);
-                let s = (s_imm10 >> 10) & 1;
-                let s_prefix = if s == 1 { 0xFFu32 << 24 } else { 0 };
-                let j1 = (j1_1_j2_imm11 >> 13) & 1;
-                let j2 = (j1_1_j2_imm11 >> 11) & 1;
-                let imm10 = s_imm10 & 0x3FF;
-                let imm11 = j1_1_j2_imm11 & 0x7FF;
-                let i1 = if j1 == s { 1 << 23 } else { 0 };
-                let i2 = if j2 == s { 1 << 22 } else { 0 };
-                let imm32 = s_prefix | i1 | i2 | (imm10 << 12) | (imm11 << 1);
+            Instruction::BranchLink { imm32 } => {
                 // Assume the prefetch has occurred
                 let old_pc = self.pc.wrapping_add(2);
                 self.lr = (old_pc & !1) | 1;
-                self.pc = old_pc.wrapping_add(imm32);
+                self.pc = old_pc.wrapping_add(imm32 as u32);
             }
             Instruction::BranchExchange { rm } => {
                 let addr = self.fetch_reg(rm);
@@ -662,20 +801,17 @@ impl Armv6M {
                     self.pc = addr & !1;
                 }
             }
-            Instruction::SubSpImm { imm7 } => {
-                let imm32 = u32::from(imm7) << 2;
+            Instruction::SubSpImm { imm32 } => {
                 // This does a subtraction
                 let value = self.sp.wrapping_add(!imm32).wrapping_add(1);
                 self.sp = value;
             }
-            Instruction::StrImmT2 { rt, imm8 } => {
-                let imm32 = u32::from(imm8) << 2;
+            Instruction::StrImmSp { rt, imm32 } => {
                 let offset_addr = self.sp.wrapping_add(imm32);
                 let value = self.fetch_reg(rt);
                 memory.store_u32(offset_addr, value)?;
             }
-            Instruction::LdrImmT2 { rt, imm8 } => {
-                let imm32 = u32::from(imm8) << 2;
+            Instruction::LdrImmSp { rt, imm32 } => {
                 let offset_addr = self.sp.wrapping_add(imm32);
                 let value = memory.load_u32(offset_addr)?;
                 self.store_reg(rt, value);
@@ -695,6 +831,12 @@ impl Armv6M {
                 let offset_addr = addr.wrapping_add(imm32);
                 let value = self.fetch_reg(rt);
                 memory.store_u8(offset_addr, (value & 0xFF) as u8)?;
+            }
+            Instruction::StrImm { rt, rn, imm32 } => {
+                let addr = self.fetch_reg(rn);
+                let offset_addr = addr.wrapping_add(imm32);
+                let value = self.fetch_reg(rt);
+                memory.store_u32(offset_addr, value)?;
             }
         }
         Ok(())
@@ -852,24 +994,24 @@ impl Armv6M {
     }
 
     /// Given a signed 11-bit word offset, sign-extend it up to an i32 byte offset.
-    fn sign_extend_imm11(imm11: u16) -> u32 {
+    fn sign_extend_imm11(imm11: u16) -> i32 {
         let imm11 = u32::from(imm11);
         if imm11 & 0x200 != 0 {
             // Top bit set, so negative, so set upper bits
-            imm11 | 0xFFFF_FC00
+            (imm11 | 0xFFFF_FC00) as i32
         } else {
-            imm11
+            imm11 as i32
         }
     }
 
     /// Given a signed 8-bit word offset, sign-extend it up to an i32 byte offset.
-    fn sign_extend_imm8(imm8: u8) -> u32 {
+    fn sign_extend_imm8(imm8: u8) -> i32 {
         let imm8 = u32::from(imm8);
         if imm8 & 0x80 != 0 {
             // Top bit set, so negative, so set upper bits
-            imm8 | 0xFFFF_FF00
+            (imm8 | 0xFFFF_FF00) as i32
         } else {
-            imm8
+            imm8 as i32
         }
     }
 }
@@ -910,8 +1052,8 @@ mod test {
 
     #[test]
     fn sign_extend_imm11() {
-        assert_eq!(0xFFFF_FFFE, Armv6M::sign_extend_imm11(0x7FE));
-        assert_eq!(0xFFFF_FFFF, Armv6M::sign_extend_imm11(0x7FF));
+        assert_eq!(-2, Armv6M::sign_extend_imm11(0x7FE));
+        assert_eq!(-1, Armv6M::sign_extend_imm11(0x7FF));
         assert_eq!(0, Armv6M::sign_extend_imm11(0));
         assert_eq!(1, Armv6M::sign_extend_imm11(1));
         assert_eq!(2, Armv6M::sign_extend_imm11(2));
@@ -982,18 +1124,18 @@ mod test {
     #[test]
     fn branch_instruction() {
         assert_eq!(
-            Ok(Instruction::Branch { imm11: 0x7fe }),
+            Ok(Instruction::Branch { imm32: -4 }),
             Armv6M::decode(0xe7fe)
         );
         assert_eq!(
-            Ok(Instruction::Branch { imm11: 0x7fc }),
+            Ok(Instruction::Branch { imm32: -8 }),
             Armv6M::decode(0xe7fc)
         );
-        assert_eq!(Ok(Instruction::Branch { imm11: 1 }), Armv6M::decode(0xe001));
+        assert_eq!(Ok(Instruction::Branch { imm32: 2 }), Armv6M::decode(0xe001));
 
         let mut cpu = Armv6M::new(0, 8);
         let mut ram = [0u32; 6];
-        cpu.execute(Instruction::Branch { imm11: 0x7fe }, &mut ram)
+        cpu.execute(Instruction::Branch { imm32: -4 }, &mut ram)
             .unwrap();
         // PC was 8, PC is still 8, because `B 0x7FE` means branch to yourself
         assert_eq!(cpu.pc, 8);
@@ -1012,7 +1154,7 @@ mod test {
         assert_eq!(
             Ok(Instruction::LdrLiteral {
                 rt: Register::R0,
-                imm8: 1
+                imm32: 4
             }),
             Armv6M::decode(0x4801)
         )
@@ -1071,7 +1213,7 @@ mod test {
             // add r7, sp, #0
             Ok(Instruction::AddSpT1 {
                 rd: Register::R7,
-                imm8: 0
+                imm32: 0
             }),
             Armv6M::decode(0xaf00)
         )
@@ -1085,7 +1227,7 @@ mod test {
         cpu.execute(
             Instruction::AddSpT1 {
                 rd: Register::R0,
-                imm8: 4,
+                imm32: 16,
             },
             &mut ram,
         )
@@ -1097,10 +1239,7 @@ mod test {
     fn branch_link_instruction() {
         assert_eq!(Err(Error::WideInstruction), Armv6M::decode(0xF04A));
         assert_eq!(
-            Ok(Instruction::BranchLink {
-                s_imm10: 0x004A,
-                j1_1_j2_imm11: 0x3E41,
-            }),
+            Ok(Instruction::BranchLink { imm32: 0x4ac82 }),
             Armv6M::decode32(0xF04A, 0xFE41)
         );
     }
@@ -1112,14 +1251,8 @@ mod test {
         let start_pc = 0xd0;
         let mut cpu = Armv6M::new(sp, start_pc);
         let mut ram = [15; 8];
-        cpu.execute(
-            Instruction::BranchLink {
-                s_imm10: 0x004A,
-                j1_1_j2_imm11: 0x3E41,
-            },
-            &mut ram,
-        )
-        .unwrap();
+        cpu.execute(Instruction::BranchLink { imm32: 0x4ac82 }, &mut ram)
+            .unwrap();
         assert_eq!(start_pc + 5, cpu.lr);
         assert_eq!(0x4ad56, cpu.pc);
     }
@@ -1147,7 +1280,7 @@ mod test {
     #[test]
     fn sub_sp_imm_instruction() {
         assert_eq!(
-            Ok(Instruction::SubSpImm { imm7: 16 }),
+            Ok(Instruction::SubSpImm { imm32: 64 }),
             Armv6M::decode(0xb090)
         );
     }
@@ -1157,17 +1290,17 @@ mod test {
         let sp = 0x100;
         let mut cpu = Armv6M::new(sp, 0);
         let mut ram = [15; 8];
-        cpu.execute(Instruction::SubSpImm { imm7: 16 }, &mut ram)
+        cpu.execute(Instruction::SubSpImm { imm32: 64 }, &mut ram)
             .unwrap();
-        assert_eq!(0x100 - (4 * 16), cpu.sp);
+        assert_eq!(0x100 - 64, cpu.sp);
     }
 
     #[test]
     fn str_imm_t2_instruction() {
         assert_eq!(
-            Ok(Instruction::StrImmT2 {
+            Ok(Instruction::StrImmSp {
                 rt: Register::R1,
-                imm8: 2
+                imm32: 8
             }),
             Armv6M::decode(0x9102)
         );
@@ -1180,9 +1313,9 @@ mod test {
         let mut ram = [15; 8];
         cpu.regs[1] = 0x12345678;
         cpu.execute(
-            Instruction::StrImmT2 {
+            Instruction::StrImmSp {
                 rt: Register::R1,
-                imm8: 2,
+                imm32: 8,
             },
             &mut ram,
         )
@@ -1193,9 +1326,9 @@ mod test {
     #[test]
     fn ldr_imm_t2_instruction() {
         assert_eq!(
-            Ok(Instruction::LdrImmT2 {
+            Ok(Instruction::LdrImmSp {
                 rt: Register::R1,
-                imm8: 2
+                imm32: 8
             }),
             Armv6M::decode(0x9902)
         );
@@ -1207,9 +1340,9 @@ mod test {
         let mut cpu = Armv6M::new(sp, 0);
         let mut ram = [0, 0, 0, 0, 0, 0, 0x12345678, 0];
         cpu.execute(
-            Instruction::LdrImmT2 {
+            Instruction::LdrImmSp {
                 rt: Register::R1,
-                imm8: 2,
+                imm32: 8,
             },
             &mut ram,
         )
@@ -1249,10 +1382,6 @@ mod test {
         assert!(!cpu.is_v());
     }
 
-    // 11 70    strb r1,[r2,#0]
-    // 1110 0000 0001 0001
-    // 0111 0xxx xxnn nmmm
-
     #[test]
     fn strb_immediate_instruction() {
         assert_eq!(
@@ -1263,6 +1392,58 @@ mod test {
             }),
             Armv6M::decode(0x7011)
         );
+    }
+
+    #[test]
+    fn strb_immediate_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[1] = 0x12345678;
+        cpu.execute(
+            Instruction::StrbImm {
+                rt: Register::R1,
+                rn: Register::R0,
+                imm5: 1,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // Lowest 8 bits of R1 written to address 4 + 1 = 5
+        assert_eq!([0, 0x7800, 0, 0, 0, 0, 0, 0], ram);
+    }
+
+    #[test]
+    fn str_immediate_instruction() {
+        assert_eq!(
+            Ok(Instruction::StrImm {
+                rt: Register::R1,
+                rn: Register::R2,
+                imm32: 0
+            }),
+            Armv6M::decode(0x6011)
+        );
+    }
+
+    #[test]
+    fn str_immediate_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[1] = 0x12345678;
+        cpu.execute(
+            Instruction::StrImm {
+                rt: Register::R1,
+                rn: Register::R0,
+                imm32: 4,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // R1 written to address 4 + (1 * 4) = 8
+        assert_eq!([0, 0, 0x12345678, 0, 0, 0, 0, 0], ram);
     }
 }
 
