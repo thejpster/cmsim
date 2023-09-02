@@ -134,12 +134,20 @@ impl<const N: usize> Memory for [u32; N] {
 /// BL, DMB, DSB, ISB, MRS, MSR
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
+    /// B <label>
     Branch { imm11: u16 },
+    /// MOV <Rd>,#<imm8>
     MovImm { rd: Register, imm8: u8 },
+    /// MOV <Rd>,<Rm>
     MovRegT1 { rm: Register, rd: Register },
+    /// BKPT <imm8>
     Breakpoint { imm8: u8 },
+    /// LDR <Rt>,#<imm8>
     LdrLiteral { rt: Register, imm8: u8 },
+    /// PUSH {<register list>}
     Push { register_list: u8, m: bool },
+    /// ADD <Rd>,SP,#<imm8>
+    AddSpT1 { rd: Register, imm8: u8 },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -258,7 +266,6 @@ impl Armv6M {
     /// that. Probably with some `decode32` function.
     pub fn decode(word: u16) -> Result<Instruction, Error> {
         if (word >> 11) == 0b00100 {
-            // MOV <Rd>,#<imm8>
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::MovImm {
@@ -266,37 +273,38 @@ impl Armv6M {
                 imm8,
             })
         } else if (word >> 11) == 0b11100 {
-            // B <location>
             Ok(Instruction::Branch {
                 imm11: word & 0x7FF,
             })
-        } else if (word >> 8) == 0b10111110 {
-            // BKPT #<imm8>
+        } else if (word >> 11) == 0b10101 {
             let imm8 = (word & 0xFF) as u8;
-            Ok(Instruction::Breakpoint { imm8 })
+            let rd = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::AddSpT1 {
+                rd: Register::from(rd),
+                imm8,
+            })
         } else if (word >> 11) == 0b01001 {
-            // LDR <Rt>,#<imm8>
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::LdrLiteral {
                 rt: Register::from(rt),
                 imm8,
             })
+        } else if (word >> 9) == 0b1011010 {
+            let m = ((word >> 8) & 1) == 1;
+            let register_list = word as u8;
+            Ok(Instruction::Push { register_list, m })
+        } else if (word >> 8) == 0b10111110 {
+            let imm8 = (word & 0xFF) as u8;
+            Ok(Instruction::Breakpoint { imm8 })
         } else if (word >> 8) == 0b01000110 {
-            // MOV <Rd>, <Rm>
             let d: u8 = ((word >> 7) & 0b1) as u8;
             let rd = (d << 3) | (word & 0b111) as u8;
             let rm: u8 = ((word >> 3) & 0x0F) as u8;
-            println!("{d} {rd} {rm}");
             Ok(Instruction::MovRegT1 {
                 rm: Register::from(rm),
                 rd: Register::from(rd),
             })
-        } else if (word >> 9) == 0b1011010 {
-            // PUSH <registers>
-            let m = ((word >> 8) & 1) == 1;
-            let register_list = word as u8;
-            Ok(Instruction::Push { register_list, m })
         } else {
             Err(Error::InvalidInstruction(word))
         }
@@ -355,6 +363,12 @@ impl Armv6M {
                         self.push_stack(value, memory)?;
                     }
                 }
+            }
+            Instruction::AddSpT1 { rd, imm8 } => {
+                let sp = self.fetch_reg(Register::Sp);
+                let imm32 = u32::from(imm8) << 2;
+                let value = sp.wrapping_add(imm32);
+                self.store_reg(rd, value);
             }
         }
         Ok(())
@@ -585,6 +599,34 @@ mod test {
         )
         .unwrap();
         assert_eq!([15, 15, 15, 15, 0, 2, 4, 6], ram);
+    }
+
+    #[test]
+    fn add_instruction() {
+        assert_eq!(
+            // add r7, sp, #0
+            Ok(Instruction::AddSpT1 {
+                rd: Register::R7,
+                imm8: 0
+            }),
+            Armv6M::decode(0xaf00)
+        )
+    }
+
+    #[test]
+    fn add_operation() {
+        let sp = 32;
+        let mut cpu = Armv6M::new(sp, 0x0);
+        let mut ram = [15; 8];
+        cpu.execute(
+            Instruction::AddSpT1 {
+                rd: Register::R0,
+                imm8: 4,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(32 + 4 * 4, cpu.regs[0]);
     }
 }
 
