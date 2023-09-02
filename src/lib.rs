@@ -6,7 +6,7 @@
 /// All the ways we can fail to execute code
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
-    InvalidAddress,
+    InvalidAddress(u32),
     InvalidInstruction(u16),
     UnalignedAccess,
     NonThumbPc,
@@ -96,13 +96,13 @@ impl Memory for [u32] {
     fn load_u32(&self, addr: u32) -> Result<u32, Error> {
         self.get(addr as usize >> 2)
             .copied()
-            .ok_or(Error::InvalidAddress)
+            .ok_or(Error::InvalidAddress(addr))
     }
 
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), Error> {
         *self
             .get_mut(addr as usize >> 2)
-            .ok_or(Error::InvalidAddress)? = value;
+            .ok_or(Error::InvalidAddress(addr))? = value;
         Ok(())
     }
 }
@@ -111,13 +111,13 @@ impl<const N: usize> Memory for [u32; N] {
     fn load_u32(&self, addr: u32) -> Result<u32, Error> {
         self.get(addr as usize >> 2)
             .copied()
-            .ok_or(Error::InvalidAddress)
+            .ok_or(Error::InvalidAddress(addr))
     }
 
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), Error> {
         *self
             .get_mut(addr as usize >> 2)
-            .ok_or(Error::InvalidAddress)? = value;
+            .ok_or(Error::InvalidAddress(addr))? = value;
         Ok(())
     }
 }
@@ -139,6 +139,7 @@ pub enum Instruction {
     MovRegT1 { rm: Register, rd: Register },
     Breakpoint { imm8: u8 },
     LdrLiteral { rt: Register, imm8: u8 },
+    Push { register_list: u8, m: bool },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -282,6 +283,7 @@ impl Armv6M {
                 imm8,
             })
         } else if (word >> 8) == 0b01000110 {
+            // MOV <Rd>, <Rm>
             let d: u8 = ((word >> 7) & 0b1) as u8;
             let rd = (d << 3) | (word & 0b111) as u8;
             let rm: u8 = ((word >> 3) & 0x0F) as u8;
@@ -290,6 +292,11 @@ impl Armv6M {
                 rm: Register::from(rm),
                 rd: Register::from(rd),
             })
+        } else if (word >> 9) == 0b1011010 {
+            // PUSH <registers>
+            let m = ((word >> 8) & 1) == 1;
+            let register_list = word as u8;
+            Ok(Instruction::Push { register_list, m })
         } else {
             Err(Error::InvalidInstruction(word))
         }
@@ -337,7 +344,27 @@ impl Armv6M {
                 let value = memory.load_u32(addr)?;
                 self.store_reg(rt, value);
             }
+            Instruction::Push { register_list, m } => {
+                if m {
+                    let lr = self.fetch_reg(Register::Lr);
+                    self.push_stack(lr, memory)?;
+                }
+                for register in [7, 6, 5, 4, 3, 2, 1, 0] {
+                    if (register_list & 1 << register) != 0 {
+                        let value = self.fetch_reg(Register::from(register));
+                        self.push_stack(value, memory)?;
+                    }
+                }
+            }
         }
+        Ok(())
+    }
+
+    fn push_stack(&mut self, value: u32, memory: &mut dyn Memory) -> Result<(), Error> {
+        let sp = self.fetch_reg(Register::Sp) - 4;
+        println!("Pushing {:08x} to {:08x}", value, sp);
+        memory.store_u32(sp, value)?;
+        self.store_reg(Register::Sp, sp);
         Ok(())
     }
 
@@ -522,6 +549,42 @@ mod test {
             }),
             Armv6M::decode(0x4686)
         )
+    }
+
+    #[test]
+    fn push_instruction() {
+        assert_eq!(
+            // Push {LR, R7}
+            Ok(Instruction::Push {
+                register_list: 0x80,
+                m: true
+            }),
+            Armv6M::decode(0xb580)
+        )
+    }
+
+    #[test]
+    fn push_operation() {
+        let mut cpu = Armv6M::new(32, 0x0);
+        let mut ram = [15; 8];
+        cpu.store_reg(Register::R0, 0);
+        cpu.store_reg(Register::R1, 1);
+        cpu.store_reg(Register::R2, 2);
+        cpu.store_reg(Register::R3, 3);
+        cpu.store_reg(Register::R4, 4);
+        cpu.store_reg(Register::R5, 5);
+        cpu.store_reg(Register::R6, 6);
+        cpu.store_reg(Register::R7, 7);
+        cpu.store_reg(Register::Lr, 8);
+        cpu.execute(
+            Instruction::Push {
+                register_list: 0x55,
+                m: false,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!([15, 15, 15, 15, 0, 2, 4, 6], ram);
     }
 }
 

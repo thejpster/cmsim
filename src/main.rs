@@ -3,7 +3,7 @@
 //! A binary linked to execute at 0x0000_0000 must be given on the command line and the binary must start
 //! with a valid interrupt vector table for the Cortex-M0+.
 //!
-//! 256 KiB of ROM at 0x0000_0000 and 256 KiB of SRAM at 0x2000_0000 are simulated.
+//! 1024 KiB of ROM at 0x0000_0000 and 1024 KiB of SRAM at 0x2000_0000 are simulated.
 
 use cmsim::Memory;
 
@@ -23,14 +23,14 @@ impl cmsim::Memory for Region {
         self.contents
             .get(addr as usize >> 2)
             .copied()
-            .ok_or(cmsim::Error::InvalidAddress)
+            .ok_or(cmsim::Error::InvalidAddress(addr))
     }
 
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), cmsim::Error> {
         *self
             .contents
             .get_mut(addr as usize >> 2)
-            .ok_or(cmsim::Error::InvalidAddress)? = value;
+            .ok_or(cmsim::Error::InvalidAddress(addr))? = value;
         Ok(())
     }
 }
@@ -46,10 +46,10 @@ impl cmsim::Memory for System {
 
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), cmsim::Error> {
         if addr >= 0x2000_0000 {
-            self.ram.store_u32(addr, value)
+            self.ram.store_u32(addr - 0x2000_0000, value)
         } else {
             // Can't write to flash
-            Err(cmsim::Error::InvalidAddress)
+            Err(cmsim::Error::InvalidAddress(addr))
         }
     }
 }
@@ -63,12 +63,12 @@ fn main() {
             contents: vec![0u32; 256 * 1024].into(),
         },
         ram: Region {
-            contents: vec![0u32; 64 * 1024].into(),
+            contents: vec![0u32; 256 * 1024].into(),
         },
     };
 
     for (idx, b) in contents.iter().enumerate() {
-                system.flash.store_u8(idx as u32, *b).unwrap();
+        system.flash.store_u8(idx as u32, *b).unwrap();
     }
 
     let sp = system.flash.load_u32(0).unwrap();
