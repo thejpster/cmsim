@@ -3,6 +3,9 @@
 //! Designed to run on `no_std` systems (although at the moment it's full of
 //! println! calls).
 
+#![deny(missing_docs)]
+#![deny(missing_debug_implementations)]
+
 /// All the ways we can fail to execute code
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -128,6 +131,63 @@ impl<const N: usize> Memory for [u32; N] {
     }
 }
 
+/// Conditions that can be applied to an operation like a Branch
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Condition {
+    /// Equal (Z == 0)
+    Eq = 0,
+    /// Not Equal (Z == 0)
+    Ne = 1,
+    /// Carry Set (C == 1)
+    Cs = 2,
+    /// Carry Clear (C == 0)
+    Cc = 3,
+    /// Minus, negative (N == 1)
+    Mi = 4,
+    /// Plus, positive (N == 0)
+    Pl = 5,
+    /// Overflow (V == 1)
+    Vs = 6,
+    /// No overflow (V == 0)
+    Vc = 7,
+    /// Unsigned higher (C == 1 and Z == 0)
+    Hi = 8,
+    /// Unsigned lower or same (C == 0 or Z == 1)
+    Ls = 9,
+    /// Signed greater than or equal (N == N)
+    Ge = 10,
+    /// Signed less than (N != N)
+    Lt = 11,
+    /// Signed greater than (Z == 0 and N == V)
+    Gt = 12,
+    /// Signed less than or equal (Z == 1 or N != V)
+    Le = 13,
+    /// Always executes
+    Always = 15,
+}
+
+impl From<u8> for Condition {
+    fn from(value: u8) -> Condition {
+        match value & 0x0F {
+            0 => Condition::Eq,
+            1 => Condition::Ne,
+            2 => Condition::Cs,
+            3 => Condition::Cc,
+            4 => Condition::Mi,
+            5 => Condition::Pl,
+            6 => Condition::Vs,
+            7 => Condition::Vc,
+            8 => Condition::Hi,
+            9 => Condition::Ls,
+            10 => Condition::Ge,
+            11 => Condition::Lt,
+            12 => Condition::Gt,
+            13 => Condition::Le,
+            _ => Condition::Always,
+        }
+    }
+}
+
 /// All the ARMv6-M supported instructions
 ///
 /// TODO:
@@ -141,50 +201,131 @@ impl<const N: usize> Memory for [u32; N] {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     /// B <label>
-    Branch { imm11: u16 },
+    Branch {
+        /// The 11-bit signed immediate value
+        imm11: u16,
+    },
+    /// B.xx <label>
+    BranchConditional {
+        /// The condition code (e.g. only branch if Zero)
+        cond: Condition,
+        /// The 8-bit signed immediate value
+        imm8: u8,
+    },
     /// MOV <Rd>,#<imm8>
-    MovImm { rd: Register, imm8: u8 },
+    MovImm {
+        /// Which register to move the value into
+        rd: Register,
+        /// The 8-bit signed immediate value
+        imm8: u8,
+    },
     /// MOV <Rd>,<Rm>
-    MovRegT1 { rm: Register, rd: Register },
+    MovRegT1 {
+        /// Which register to move into
+        rd: Register,
+        /// Which register to move from
+        rm: Register,
+    },
     /// BKPT <imm8>
-    Breakpoint { imm8: u8 },
+    Breakpoint {
+        /// The 8-bit signed immediate value
+        imm8: u8,
+    },
     /// LDR <Rt>,#<imm8>
-    LdrLiteral { rt: Register, imm8: u8 },
+    LdrLiteral {
+        /// Which register to move into
+        rt: Register,
+        /// The 8-bit signed immediate value
+        imm8: u8,
+    },
     /// PUSH {<register list>}
-    Push { register_list: u8, m: bool },
+    Push {
+        /// A bitmask of registers (R7 to R0) to push
+        register_list: u8,
+        /// Also push LR
+        m: bool,
+    },
     /// ADD <Rd>,SP,#<imm8>
-    AddSpT1 { rd: Register, imm8: u8 },
+    AddSpT1 {
+        /// Which register to store the result in
+        rd: Register,
+        /// The 8-bit signed immediate value
+        imm8: u8,
+    },
     /// BL <label>
-    BranchLink { s_imm10: u16, j1_1_j2_imm11: u16 },
+    BranchLink {
+        /// Branch argument from the first word
+        s_imm10: u16,
+        /// Branch argument from the second word
+        j1_1_j2_imm11: u16,
+    },
     /// BX <Rm>
-    BranchExchange { rm: Register },
+    BranchExchange {
+        /// Which register contains the new PC
+        rm: Register,
+    },
     /// SUB SP, #<imm7>
-    SubSpImm { imm7: u8 },
+    SubSpImm {
+        /// The 7-bit signed immediate value
+        imm7: u8,
+    },
     /// STR <Rt>,[SP,#<imm8>]
-    StrImmT2 { rt: Register, imm8: u8 },
+    StrImmT2 {
+        /// Which register to fetch the value from
+        rt: Register,
+        /// The 8-bit signed immediate value       
+        imm8: u8,
+    },
     /// LDR <Rt>,[SP,#<imm8>]
-    LdrImmT2 { rt: Register, imm8: u8 },
+    LdrImmT2 {
+        /// Which register to store the value in
+        rt: Register,
+        /// The 8-bit signed immediate value       
+        imm8: u8,
+    },
     /// CMP <Rn>,<Rm>
-    CmpReg { rm: Register, rn: Register },
+    CmpReg {
+        /// The left hand register to compare
+        rn: Register,
+        /// The right hand register to compare
+        rm: Register,
+    },
 }
 
+/// Identifies a register in our CPU
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Register {
+    /// Register R0
     R0,
+    /// Register R1
     R1,
+    /// Register R2
     R2,
+    /// Register R3
     R3,
+    /// Register R4
     R4,
+    /// Register R5
     R5,
+    /// Register R6
     R6,
+    /// Register R7
     R7,
+    /// Register R8
     R8,
+    /// Register R9
     R9,
+    /// Register R10
     R10,
+    /// Register R11
     R11,
+    /// Register R12
     R12,
+    /// Link Register
     Lr,
+    /// Stack Pointer
     Sp,
+    /// Program Counter
     Pc,
 }
 
@@ -231,12 +372,16 @@ pub struct Armv6M {
     lr: u32,
     pc: u32,
     breakpoint: Option<u8>,
-    flag_zero: bool,
-    flag_negative: bool,
+    aspr: u32,
     mode: Mode,
 }
 
 impl Armv6M {
+    const FLAG_N: u32 = 1 << 31;
+    const FLAG_Z: u32 = 1 << 30;
+    const FLAG_C: u32 = 1 << 29;
+    const FLAG_V: u32 = 1 << 28;
+
     /// Create a new CPU.
     ///
     /// All registers default to 0, except the Stack Pointer and Program
@@ -299,7 +444,14 @@ impl Armv6M {
     /// Some instructions are made up of two 16-bit values - you will get
     /// `Error::WideInstruction` if you try and decode half of one.
     pub fn decode(word: u16) -> Result<Instruction, Error> {
-        if (word >> 11) == 0b11110 {
+        if (word >> 12) == 0b1101 {
+            let cond = ((word >> 8) & 0x0F) as u8;
+            let imm8 = word as u8;
+            Ok(Instruction::BranchConditional {
+                cond: Condition::from(cond),
+                imm8,
+            })
+        } else if (word >> 11) == 0b11110 {
             // This is a 32-bit BL <label>
             Err(Error::WideInstruction)
         } else if (word >> 11) == 0b10010 {
@@ -403,8 +555,10 @@ impl Armv6M {
             Instruction::MovImm { rd, imm8 } => {
                 let imm32 = u32::from(imm8);
                 self.store_reg(rd, imm32);
-                self.flag_zero = imm32 == 0;
-                self.flag_negative = imm32 & 0x8000_0000 != 0;
+                self.set_z(imm32 == 0);
+                self.set_n(imm32 >= 0x80000000);
+                // c is unchanged
+                // v is unchanged
             }
             Instruction::MovRegT1 { rm, rd } => {
                 let value = self.fetch_reg(rm);
@@ -414,11 +568,18 @@ impl Armv6M {
                     self.store_reg(rd, value);
                 }
             }
+            Instruction::BranchConditional { cond, imm8 } => {
+                let imm32 = Self::sign_extend_imm8(imm8) << 1;
+                if self.check_condition(cond) {
+                    self.pc = self.pc.wrapping_add(2);
+                    self.pc = self.pc.wrapping_add(imm32);
+                }
+            }
             Instruction::Branch { imm11 } => {
                 let imm32 = Self::sign_extend_imm11(imm11) << 1;
                 // Assume's PC next increment has happened already
                 self.pc = self.pc.wrapping_add(2);
-                self.pc = self.pc.wrapping_add(imm32 as u32);
+                self.pc = self.pc.wrapping_add(imm32);
             }
             Instruction::Breakpoint { imm8 } => {
                 self.breakpoint = Some(imm8);
@@ -504,14 +665,54 @@ impl Armv6M {
             Instruction::CmpReg { rm, rn } => {
                 let value_m = self.fetch_reg(rm);
                 let value_n = self.fetch_reg(rn);
-                self.flag_zero = value_m == value_n;
-                self.flag_negative = value_m < value_n;
-                // todo: self.flag_carry and self.flag_overflow?
+                let (result, carry, overflow) = Self::add_with_carry(value_n, !value_m, true);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry);
+                self.set_v(overflow);
             }
         }
         Ok(())
     }
 
+    /// Adds two 32-bit numbers, with carry in, producing a result, carry out, and overflow.
+    fn add_with_carry(value1: u32, value2: u32, carry_in: bool) -> (u32, bool, bool) {
+        let (result, carry_out1) = value1.overflowing_add(value2);
+        let (result, carry_out2) = result.overflowing_add(if carry_in { 1 } else { 0 });
+        // Did we carry into the 32nd bit?
+        let carry_out = carry_out1 | carry_out2;
+        // You added two positive numbers but got a negative number
+        let overflow_out =
+            (value1 <= 0x7FFF_FFFF) && (value2 <= 0x7FFF_FFFF) && (result > 0x7FFF_FFFF);
+        println!(
+            "add_with_carry {:#x} + {:#x} + {} -> {:#x} {} {}",
+            value1, value2, carry_in, result, carry_out, overflow_out
+        );
+        (result, carry_out, overflow_out)
+    }
+
+    /// Check whether the CPU's ASPR flags match the given condition.
+    fn check_condition(&self, cond: Condition) -> bool {
+        match cond {
+            Condition::Eq => self.is_z(),
+            Condition::Ne => !self.is_z(),
+            Condition::Cs => self.is_c(),
+            Condition::Cc => !self.is_c(),
+            Condition::Mi => self.is_n(),
+            Condition::Pl => !self.is_n(),
+            Condition::Vs => self.is_v(),
+            Condition::Vc => !self.is_v(),
+            Condition::Hi => self.is_c() && !self.is_z(),
+            Condition::Ls => !self.is_c() || self.is_z(),
+            Condition::Ge => self.is_n() == self.is_v(),
+            Condition::Lt => self.is_n() != self.is_v(),
+            Condition::Gt => !self.is_z() && (self.is_n() == self.is_v()),
+            Condition::Le => self.is_z() || (self.is_n() != self.is_v()),
+            Condition::Always => true,
+        }
+    }
+
+    /// Push one value onto the stack
     fn push_stack(&mut self, value: u32, memory: &mut dyn Memory) -> Result<(), Error> {
         let sp = self.sp - 4;
         println!("Pushing {:08x} to {:08x}", value, sp);
@@ -520,6 +721,7 @@ impl Armv6M {
         Ok(())
     }
 
+    /// Store a value into the given register
     fn store_reg(&mut self, register: Register, value: u32) {
         match register {
             Register::R0 => self.regs[0] = value,
@@ -541,6 +743,7 @@ impl Armv6M {
         }
     }
 
+    /// Get a value from the given register
     fn fetch_reg(&mut self, register: Register) -> u32 {
         match register {
             Register::R0 => self.regs[0],
@@ -562,18 +765,86 @@ impl Armv6M {
         }
     }
 
+    /// Get whether the last instruction was a BKPT instruction
     pub fn breakpoint(&self) -> Option<u8> {
         self.breakpoint
     }
 
+    /// Get the N flag
+    fn is_n(&self) -> bool {
+        (self.aspr & Self::FLAG_N) != 0
+    }
+
+    /// Get the Z flag
+    fn is_z(&self) -> bool {
+        (self.aspr & Self::FLAG_Z) != 0
+    }
+
+    /// Get the C flag
+    fn is_c(&self) -> bool {
+        (self.aspr & Self::FLAG_C) != 0
+    }
+
+    /// Get the V flag
+    fn is_v(&self) -> bool {
+        (self.aspr & Self::FLAG_V) != 0
+    }
+
+    /// Set the N flag
+    fn set_n(&mut self, flag: bool) {
+        if flag {
+            self.aspr |= Self::FLAG_N;
+        } else {
+            self.aspr &= !Self::FLAG_N;
+        }
+    }
+
+    /// Set the Z flag
+    fn set_z(&mut self, flag: bool) {
+        if flag {
+            self.aspr |= Self::FLAG_Z;
+        } else {
+            self.aspr &= !Self::FLAG_Z;
+        }
+    }
+
+    /// Set the C flag
+    fn set_c(&mut self, flag: bool) {
+        if flag {
+            self.aspr |= Self::FLAG_C;
+        } else {
+            self.aspr &= !Self::FLAG_C;
+        }
+    }
+
+    /// Set the V flag
+    fn set_v(&mut self, flag: bool) {
+        if flag {
+            self.aspr |= Self::FLAG_V;
+        } else {
+            self.aspr &= !Self::FLAG_V;
+        }
+    }
+
     /// Given a signed 11-bit word offset, sign-extend it up to an i32 byte offset.
-    fn sign_extend_imm11(imm11: u16) -> i32 {
+    fn sign_extend_imm11(imm11: u16) -> u32 {
         let imm11 = u32::from(imm11);
         if imm11 & 0x200 != 0 {
             // Top bit set, so negative, so set upper bits
-            (imm11 | 0xFFFF_FC00) as i32
+            imm11 | 0xFFFF_FC00
         } else {
-            imm11 as i32
+            imm11
+        }
+    }
+
+    /// Given a signed 8-bit word offset, sign-extend it up to an i32 byte offset.
+    fn sign_extend_imm8(imm8: u8) -> u32 {
+        let imm8 = u32::from(imm8);
+        if imm8 & 0x80 != 0 {
+            // Top bit set, so negative, so set upper bits
+            imm8 | 0xFFFF_FF00
+        } else {
+            imm8
         }
     }
 }
@@ -583,9 +854,39 @@ mod test {
     use super::*;
 
     #[test]
+    fn add_with_carry() {
+        static TEST_CASES: &[(u32, u32, bool, u32, bool, bool)] = &[
+            (1, 1, false, 2, false, false),
+            (1, 0xFFFF_FFFF, false, 0, true, false),
+            (1, 0xFFFF_FFFF, true, 1, true, false),
+            (0xFFFF_FFFF, 0xFFFF_FFFF, false, 0xFFFF_FFFE, true, false),
+            (0xFFFF_FFFF, 0xFFFF_FFFF, true, 0xFFFF_FFFF, true, false),
+            (0x4FFF_FFFF, 0x4FFF_FFFF, false, 0x9FFF_FFFE, false, true),
+        ];
+        for case in TEST_CASES {
+            let (result, carry, overflow) = Armv6M::add_with_carry(case.0, case.1, case.2);
+            assert_eq!(
+                result, case.3,
+                "result for {:#x} + {:#x} + {}",
+                case.0, case.1, case.2
+            );
+            assert_eq!(
+                carry, case.4,
+                "carry for {:#x} + {:#x} + {}",
+                case.0, case.1, case.2
+            );
+            assert_eq!(
+                overflow, case.5,
+                "overflow for {:#x} + {:#x} + {}",
+                case.0, case.1, case.2
+            );
+        }
+    }
+
+    #[test]
     fn sign_extend_imm11() {
-        assert_eq!(-2, Armv6M::sign_extend_imm11(0x7FE));
-        assert_eq!(-1, Armv6M::sign_extend_imm11(0x7FF));
+        assert_eq!(0xFFFF_FFFE, Armv6M::sign_extend_imm11(0x7FE));
+        assert_eq!(0xFFFF_FFFF, Armv6M::sign_extend_imm11(0x7FF));
         assert_eq!(0, Armv6M::sign_extend_imm11(0));
         assert_eq!(1, Armv6M::sign_extend_imm11(1));
         assert_eq!(2, Armv6M::sign_extend_imm11(2));
@@ -907,31 +1208,20 @@ mod test {
         let sp = 16;
         let mut cpu = Armv6M::new(sp, 0);
         let mut ram = [0; 8];
-        cpu.regs[0] = 100;
-        cpu.regs[1] = 200;
-        cpu.regs[2] = 200;
+        cpu.regs[0] = 0x2007815c;
+        cpu.regs[1] = 0x2007a0ac;
         cpu.execute(
             Instruction::CmpReg {
-                rm: Register::R0,
-                rn: Register::R1,
+                rn: Register::R0,
+                rm: Register::R1,
             },
             &mut ram,
         )
         .unwrap();
-        // 100 - 200
-        assert!(cpu.flag_negative);
-        assert!(!cpu.flag_zero);
-        cpu.execute(
-            Instruction::CmpReg {
-                rm: Register::R2,
-                rn: Register::R1,
-            },
-            &mut ram,
-        )
-        .unwrap();
-        // 200 - 200
-        assert!(!cpu.flag_negative);
-        assert!(cpu.flag_zero);
+        assert!(cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(!cpu.is_c());
+        assert!(!cpu.is_v());
     }
 }
 
