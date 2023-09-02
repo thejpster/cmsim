@@ -21,7 +21,7 @@ struct System {
 impl cmsim::Memory for Region {
     fn load_u32(&self, addr: u32) -> Result<u32, cmsim::Error> {
         self.contents
-            .get(addr as usize)
+            .get(addr as usize >> 2)
             .copied()
             .ok_or(cmsim::Error::InvalidAddress)
     }
@@ -29,7 +29,7 @@ impl cmsim::Memory for Region {
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), cmsim::Error> {
         *self
             .contents
-            .get_mut(addr as usize)
+            .get_mut(addr as usize >> 2)
             .ok_or(cmsim::Error::InvalidAddress)? = value;
         Ok(())
     }
@@ -60,7 +60,7 @@ fn main() {
 
     let mut system = System {
         flash: Region {
-            contents: vec![0u32; 64 * 1024].into(),
+            contents: vec![0u32; 256 * 1024].into(),
         },
         ram: Region {
             contents: vec![0u32; 64 * 1024].into(),
@@ -68,7 +68,7 @@ fn main() {
     };
 
     for (idx, b) in contents.iter().enumerate() {
-        system.flash.store_u8(idx as u32, *b).unwrap();
+                system.flash.store_u8(idx as u32, *b).unwrap();
     }
 
     let sp = system.flash.load_u32(0).unwrap();
