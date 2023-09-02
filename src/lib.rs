@@ -359,6 +359,15 @@ pub enum Instruction {
         /// How much to add to <Rn>
         imm3: u8,
     },
+    /// `LSLS <Rx>,<Rx>,#<imm>`
+    LslsImm {
+        /// Which register to store the result in
+        rd: Register,
+        /// Which register to get the value from
+        rm: Register,
+        /// How many bits to shift
+        imm5: u8,
+    },
     // =======================================================================
     // Logical Instructions
     // =======================================================================
@@ -440,6 +449,7 @@ impl std::fmt::Display for Instruction {
             Instruction::LdrSpImm { rt, imm32 } => write!(f, "LDR {},[SP,#{}]", rt, imm32),
             Instruction::StrSpImm { rt, imm32 } => write!(f, "STR {},[SP,#{}]", rt, imm32),
             Instruction::Adds { rd, rn, imm3 } => write!(f, "ADDS {},{},#{}", rd, rn, imm3),
+            Instruction::LslsImm { rd, rm, imm5 } => write!(f, "LSLS {},{},#{}", rd, rm, imm5),
             Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
             Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{:02x}", imm8),
         }
@@ -701,6 +711,15 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm32: u32::from(imm5) << 2,
             })
+        } else if (word >> 11) == 0b00000 {
+            let imm5 = ((word >> 6) & 0x1F) as u8;
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::LslsImm {
+                rd: Register::from(rd),
+                rm: Register::from(rm),
+                imm5,
+            })
         } else if (word >> 9) == 0b1011010 {
             let m = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
@@ -929,12 +948,28 @@ impl Armv6M {
             Instruction::Adds { rd, rn, imm3 } => {
                 let value1 = self.fetch_reg(rn);
                 let value2 = u32::from(imm3);
-                let (result, carry, overflow) = Self::add_with_carry(value1, value2, false);
+                let (result, carry_out, overflow) = Self::add_with_carry(value1, value2, false);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
-                self.set_c(carry);
+                self.set_c(carry_out);
                 self.set_v(overflow);
                 self.store_reg(rd, result);
+            }
+            Instruction::LslsImm { rd, rm, imm5 } => {
+                let value = self.fetch_reg(rm);
+                let shift_n = u32::from(imm5);
+                let carry_in = self.is_c();
+                let (result, carry_out) = if shift_n == 0 {
+                    (value, carry_in)
+                } else {
+                    let wide_value = u64::from(value);
+                    let shifted = wide_value << shift_n;
+                    (shifted as u32, (shifted & (1 << 32)) != 0)
+                };
+                self.store_reg(rd, result);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
             }
             // =======================================================================
             // Logical Instructions
@@ -1887,6 +1922,43 @@ mod test {
         assert!(!cpu.is_c());
         assert!(!cpu.is_v());
     }
+    #[test]
+    fn lsls_instruction() {
+        let i = Armv6M::decode(0x0081);
+        // lsls	r1, r0, #2
+        assert_eq!(
+            Ok(Instruction::LslsImm {
+                rd: Register::R1,
+                rm: Register::R0,
+                imm5: 2
+            }),
+            i
+        );
+        assert_eq!("LSLS R1,R0,#2", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn lsls_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram: [u32; 8] = [0; 8];
+        cpu.regs[1] = 0x12345678;
+        cpu.execute(
+            Instruction::LslsImm {
+                rd: Register::R0,
+                rm: Register::R1,
+                imm5: 4,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x23456780, cpu.regs[0]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+
     // =======================================================================
     // Logical Instructions
     // =======================================================================
