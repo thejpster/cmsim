@@ -76,8 +76,28 @@ fn main() {
     println!("SP is 0x{:08x}, Reset is 0x{:08x}", sp, reset);
     let mut cpu = cmsim::Armv6M::new(sp, reset);
 
-    for _ in 0..100 {
+    loop {
         cpu.step(&mut system).unwrap();
-        println!("CPU:\n{:#x?}", cpu);
+        println!("CPU:\n{:08x?}", cpu);
+        if let Some(arg) = cpu.breakpoint() {
+            println!("Got breakpoint 0x{:02X}", arg);
+            if arg == 0xAB {
+                // Semihosting
+                let op_num = cpu.register(cmsim::Register::R0);
+                let _param = cpu.register(cmsim::Register::R1);
+                match op_num {
+                    0x18 => {
+                        // SYS_EXIT
+                        println!("SYS_EXIT...");
+                        std::process::exit(0);
+                    }
+                    _ => {
+                        panic!("Unsupported semihosting operation 0x{:02x}", op_num);
+                    }
+                }
+            } else {
+                panic!("Unsupported breakpoint 0x{:02x}", arg);
+            }
+        };
     }
 }

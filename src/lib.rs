@@ -134,17 +134,39 @@ impl<const N: usize> Memory for [u32; N] {
 pub enum Instruction {
     Branch { imm11: u16 },
     Movs { rd: u8, imm8: u8 },
+    Breakpoint { imm8: u8 },
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Register {
+    R0,
+    R1,
+    R2,
+    R3,
+    R4,
+    R5,
+    R6,
+    R7,
+    R8,
+    R9,
+    R10,
+    R11,
+    R12,
+    Lr,
+    Sp,
+    Pc,
 }
 
 /// Represents the core of an ARMv6-M compatible processor, like a Cortex-M0.
 ///
 /// Contains the registers, stack pointer, program counter, and flags.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Armv6M {
     regs: [Wrapping<u32>; 13],
     sp: Wrapping<u32>,
     lr: Wrapping<u32>,
     pc: Wrapping<u32>,
+    breakpoint: Option<u8>,
 }
 
 impl Armv6M {
@@ -157,6 +179,28 @@ impl Armv6M {
             sp: Wrapping(sp),
             pc: Wrapping(pc),
             ..Default::default()
+        }
+    }
+
+    /// Get the contents of a register
+    pub fn register(&self, reg: Register) -> u32 {
+        match reg {
+            Register::R0 => self.regs[0].0,
+            Register::R1 => self.regs[1].0,
+            Register::R2 => self.regs[2].0,
+            Register::R3 => self.regs[3].0,
+            Register::R4 => self.regs[4].0,
+            Register::R5 => self.regs[5].0,
+            Register::R6 => self.regs[6].0,
+            Register::R7 => self.regs[7].0,
+            Register::R8 => self.regs[8].0,
+            Register::R9 => self.regs[9].0,
+            Register::R10 => self.regs[10].0,
+            Register::R11 => self.regs[11].0,
+            Register::R12 => self.regs[12].0,
+            Register::Lr => self.lr.0,
+            Register::Sp => self.sp.0,
+            Register::Pc => self.pc.0,
         }
     }
 
@@ -174,7 +218,7 @@ impl Armv6M {
             return Err(Error::NonThumbPc);
         }
         let word = memory.load_u16(self.pc.0 & !1)?;
-        println!("Loaded 0x{:04x} from 0x{:08x}", word, self.pc);
+        println!("Loaded 0x{:04x} from 0x{:08x}", word, self.pc.0 & !1);
         Self::decode(word)
     }
 
@@ -183,27 +227,26 @@ impl Armv6M {
     /// Some instructions are made up of two 16-bit values - TODO how we handle
     /// that. Probably with some `decode32` function.
     pub fn decode(word: u16) -> Result<Instruction, Error> {
-        let opcode = word >> 11;
-        println!("Opcode is 0b{:05b}", opcode);
-        match opcode {
-            0b00100 => {
-                // MOV <rd>, #imm8
-                let imm8 = (word & 0xFF) as u8;
-                let rd = ((word >> 8) & 0b111) as u8;
-                Ok(Instruction::Movs { rd, imm8 })
-            }
-            0b11100 => {
-                // B <location>
-                Ok(Instruction::Branch {
-                    imm11: word & 0x7FF,
-                })
-            }
-            _ => Err(Error::InvalidInstruction),
+        if (word >> 11) == 0b00100 {
+            // MOV <rd>, #imm8
+            let imm8 = (word & 0xFF) as u8;
+            let rd = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::Movs { rd, imm8 })
+        } else if (word >> 11) == 0b11100 {
+            // B <location>
+            Ok(Instruction::Branch {
+                imm11: word & 0x7FF,
+            })
+        } else if (word >> 8) == 0b10111110 {
+            Ok(Instruction::Breakpoint { imm8: word as u8 })
+        } else {
+            Err(Error::InvalidInstruction)
         }
     }
 
     /// Execute an instruction.
     pub fn execute(&mut self, instruction: Instruction, _memory: &mut dyn Memory) {
+        self.breakpoint = None;
         match instruction {
             Instruction::Movs { rd, imm8 } => {
                 self.pc += 2;
@@ -215,7 +258,14 @@ impl Armv6M {
                 self.pc += 4;
                 self.pc += imm32 as u32;
             }
+            Instruction::Breakpoint { imm8 } => {
+                self.breakpoint = Some(imm8);
+            }
         }
+    }
+
+    pub fn breakpoint(&self) -> Option<u8> {
+        self.breakpoint
     }
 
     /// Given a signed 11-bit word offset, sign-extend it up to an i32 byte offset.
@@ -319,6 +369,14 @@ mod test {
         cpu.execute(Instruction::Branch { imm11: 0x7fe }, &mut ram);
         // PC was 8, PC is still 8, because `B 0x7FE` means branch to yourself
         assert_eq!(cpu.pc.0, 8);
+    }
+
+    #[test]
+    fn bkpt_instruction() {
+        assert_eq!(
+            Ok(Instruction::Breakpoint { imm8: 0xCC }),
+            Armv6M::decode(0xbecc)
+        );
     }
 }
 

@@ -5,8 +5,8 @@
 .org    0x00000000
 .global _start
 
-.word 0x20001000
-.word _start + 1
+_sp: .word 0x20001000
+_reset: .word 0x00000009
 
 _start:
     movs r0, #64
@@ -20,4 +20,5 @@ forward:
     b back
 
 fin:
-    b .
+    movs r0, #0x18 // SYS_EXIT
+    bkpt 0xAB      // Semihosting
