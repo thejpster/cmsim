@@ -11,13 +11,6 @@ struct Region {
     contents: Box<[u32]>,
 }
 
-struct System {
-    /// At 0x0000_0000
-    flash: Region,
-    /// At 0x2000_0000
-    ram: Region,
-}
-
 impl cmsim::Memory for Region {
     fn load_u32(&self, addr: u32) -> Result<u32, cmsim::Error> {
         self.contents
@@ -35,21 +28,64 @@ impl cmsim::Memory for Region {
     }
 }
 
+/// Represents a basic UART, compatible with the one in QEMU
+///
+/// Writes to standard out and reads from stdin.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Uart {
+    baud: u32,
+    control: u32,
+}
+
+impl cmsim::Memory for Uart {
+    fn load_u32(&self, addr: u32) -> Result<u32, cmsim::Error> {
+        match addr {
+            8 => Ok(self.control),
+            16 => Ok(self.baud),
+            _ => Err(cmsim::Error::InvalidAddress(addr)),
+        }
+    }
+
+    fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), cmsim::Error> {
+        println!("UART register {}", addr);
+        match addr {
+            8 => self.control = value,
+            16 => self.baud = value,
+            _ => {
+                return Err(cmsim::Error::InvalidAddress(addr));
+            }
+        }
+        Ok(())
+    }
+}
+
+struct System {
+    /// Flash at 0x0000_0000
+    flash: Region,
+    /// SRAM at 0x2000_0000
+    ram: Region,
+    /// UART at 0x5930_3000
+    uart: Uart,
+}
+
 impl cmsim::Memory for System {
     fn load_u32(&self, addr: u32) -> Result<u32, cmsim::Error> {
         if addr < 0x2000_0000 {
             self.flash.load_u32(addr)
+        } else if (0x5930_3000..0x5930_3100).contains(&addr) {
+            self.uart.load_u32(addr - 0x5930_3000)
         } else {
             self.ram.load_u32(addr - 0x2000_0000)
         }
     }
 
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), cmsim::Error> {
-        if addr >= 0x2000_0000 {
-            self.ram.store_u32(addr - 0x2000_0000, value)
-        } else {
-            // Can't write to flash
+        if addr < 0x2000_0000 {
             Err(cmsim::Error::InvalidAddress(addr))
+        } else if (0x5930_3000..0x5930_3100).contains(&addr) {
+            self.uart.store_u32(addr - 0x5930_3000, value)
+        } else {
+            self.ram.store_u32(addr - 0x2000_0000, value)
         }
     }
 }
@@ -65,6 +101,7 @@ fn main() {
         ram: Region {
             contents: vec![0u32; 256 * 1024].into(),
         },
+        uart: Default::default(),
     };
 
     for (idx, b) in contents.iter().enumerate() {
