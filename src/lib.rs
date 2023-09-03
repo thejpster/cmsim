@@ -368,7 +368,25 @@ pub enum Instruction {
         /// Which register to get the second value from
         rm: Register,
     },
-    /// `LSLS <Rx>,<Rx>,#<imm>`
+    /// `SUBS <Rd>,<Rn>,#<imm3>`
+    SubsImm {
+        /// Which register to store the result in
+        rd: Register,
+        /// Which register to get the value from
+        rn: Register,
+        /// How much to subtract from <Rn>
+        imm3: u8,
+    },
+    /// `SUBS <Rd>,<Rn>,<Rm>`
+    SubsReg {
+        /// Which register to store the result in
+        rd: Register,
+        /// Which register to get the first value from
+        rn: Register,
+        /// Which register to get the second value from
+        rm: Register,
+    },
+    /// `LSLS <Rd>,<Rm>,#<imm>`
     LslsImm {
         /// Which register to store the result in
         rd: Register,
@@ -376,6 +394,13 @@ pub enum Instruction {
         rm: Register,
         /// How many bits to shift
         imm5: u8,
+    },
+    /// `LSLS <Rdn>,<Rm>
+    LslsReg {
+        /// Which register to shift
+        rdn: Register,
+        /// How many bits to shift (read from bottom byte)
+        rm: Register,
     },
     /// `LSRS <Rx>,<Rx>,#<imm>`
     LsrsImm {
@@ -475,7 +500,10 @@ impl std::fmt::Display for Instruction {
             Instruction::StrSpImm { rt, imm32 } => write!(f, "STR {},[SP,#{}]", rt, imm32),
             Instruction::AddsImm { rd, rn, imm3 } => write!(f, "ADDS {},{},#{}", rd, rn, imm3),
             Instruction::AddsReg { rd, rn, rm } => write!(f, "ADDS {},{},{}", rd, rn, rm),
+            Instruction::SubsImm { rd, rn, imm3 } => write!(f, "SUBS {},{},#{}", rd, rn, imm3),
+            Instruction::SubsReg { rd, rn, rm } => write!(f, "SUBS {},{},{}", rd, rn, rm),
             Instruction::LslsImm { rd, rm, imm5 } => write!(f, "LSLS {},{},#{}", rd, rm, imm5),
+            Instruction::LslsReg { rdn, rm } => write!(f, "LSLS {},{}", rdn, rm),
             Instruction::LsrsImm { rd, rm, imm5 } => write!(f, "LSRS {},{},#{}", rd, rm, imm5),
             Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
             Instruction::CmpImm { rn, imm32 } => write!(f, "CMP {},#{}", rn, imm32),
@@ -793,6 +821,24 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
+        } else if (word >> 9) == 0b0001111 {
+            let imm3 = ((word >> 6) & 0b111) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::SubsImm {
+                rd: Register::from(rd),
+                rn: Register::from(rn),
+                imm3,
+            })
+        } else if (word >> 9) == 0b001101 {
+            let rm = ((word >> 6) & 0b111) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::SubsReg {
+                rd: Register::from(rd),
+                rn: Register::from(rn),
+                rm: Register::from(rm),
+            })
         } else if (word >> 8) == 0b10111110 {
             let imm8 = (word & 0xFF) as u8;
             Ok(Instruction::Breakpoint { imm8 })
@@ -818,6 +864,13 @@ impl Armv6M {
             let imm7 = (word & 0x7F) as u8;
             Ok(Instruction::SubSpImm {
                 imm32: u32::from(imm7) << 2,
+            })
+        } else if (word >> 6) == 0b0100000010 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rdn = (word & 0b111) as u8;
+            Ok(Instruction::LslsReg {
+                rdn: Register::from(rdn),
+                rm: Register::from(rm),
             })
         } else if (word >> 6) == 0b0100001010 {
             let rm = ((word >> 3) & 0b111) as u8;
@@ -1021,6 +1074,26 @@ impl Armv6M {
                 self.set_v(overflow);
                 self.store_reg(rd, result);
             }
+            Instruction::SubsImm { rd, rn, imm3 } => {
+                let value1 = self.fetch_reg(rn);
+                let value2 = u32::from(imm3);
+                let (result, carry_out, overflow) = Self::add_with_carry(value1, !value2, true);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+                self.set_v(overflow);
+                self.store_reg(rd, result);
+            }
+            Instruction::SubsReg { rd, rn, rm } => {
+                let value1 = self.fetch_reg(rn);
+                let value2 = self.fetch_reg(rm);
+                let (result, carry_out, overflow) = Self::add_with_carry(value1, !value2, true);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+                self.set_v(overflow);
+                self.store_reg(rd, result);
+            }
             Instruction::LslsImm { rd, rm, imm5 } => {
                 let value = self.fetch_reg(rm);
                 let shift_n = u32::from(imm5);
@@ -1033,6 +1106,22 @@ impl Armv6M {
                     (shifted as u32, (shifted & (1 << 32)) != 0)
                 };
                 self.store_reg(rd, result);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+            }
+            Instruction::LslsReg { rdn, rm } => {
+                let value = self.fetch_reg(rdn);
+                let shift_n = self.fetch_reg(rm) & 0xFF;
+                let carry_in = self.is_c();
+                let (result, carry_out) = if shift_n == 0 {
+                    (value, carry_in)
+                } else {
+                    let wide_value = u64::from(value);
+                    let shifted = wide_value << shift_n;
+                    (shifted as u32, (shifted & (1 << 32)) != 0)
+                };
+                self.store_reg(rdn, result);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
                 self.set_c(carry_out);
@@ -2052,7 +2141,79 @@ mod test {
         assert!(!cpu.is_v());
     }
     #[test]
-    fn lsls_instruction() {
+    fn subs_imm_instruction() {
+        let i = Armv6M::decode(0x1f00);
+        assert_eq!(
+            Ok(Instruction::SubsImm {
+                rd: Register::R0,
+                rn: Register::R0,
+                imm3: 4
+            }),
+            i
+        );
+        assert_eq!("SUBS R0,R0,#4", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn subs_imm_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[1] = 0x12345678;
+        cpu.execute(
+            Instruction::SubsImm {
+                rd: Register::R0,
+                rn: Register::R1,
+                imm3: 1,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x12345677, cpu.regs[0]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+    #[test]
+    fn subs_reg_instruction() {
+        let i = Armv6M::decode(0x1A40);
+        assert_eq!(
+            Ok(Instruction::SubsReg {
+                rd: Register::R0,
+                rn: Register::R0,
+                rm: Register::R1,
+            }),
+            i
+        );
+        assert_eq!("SUBS R0,R0,R1", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn subs_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[1] = 0x12345678;
+        cpu.regs[2] = 1;
+        cpu.execute(
+            Instruction::SubsReg {
+                rd: Register::R0,
+                rn: Register::R1,
+                rm: Register::R2,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x12345677, cpu.regs[0]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+    #[test]
+    fn lsls_imm_instruction() {
         let i = Armv6M::decode(0x0081);
         // lsls	r1, r0, #2
         assert_eq!(
@@ -2067,7 +2228,7 @@ mod test {
     }
 
     #[test]
-    fn lsls_operation() {
+    fn lsls_imm_operation() {
         let sp = 16;
         let mut cpu = Armv6M::new(sp, 0);
         let mut ram: [u32; 8] = [0; 8];
@@ -2082,6 +2243,41 @@ mod test {
         )
         .unwrap();
         assert_eq!(0x23456780, cpu.regs[0]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+    #[test]
+    fn lsls_reg_instruction() {
+        let i = Armv6M::decode(0x409c);
+        // lsls	r1, r0, #2
+        assert_eq!(
+            Ok(Instruction::LslsReg {
+                rdn: Register::R4,
+                rm: Register::R3,
+            }),
+            i
+        );
+        assert_eq!("LSLS R4,R3", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn lsls_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram: [u32; 8] = [0; 8];
+        cpu.regs[4] = 0x12345678;
+        cpu.regs[3] = 4;
+        cpu.execute(
+            Instruction::LslsReg {
+                rdn: Register::R4,
+                rm: Register::R3,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x23456780, cpu.regs[4]);
         assert!(!cpu.is_n());
         assert!(!cpu.is_z());
         assert!(cpu.is_c());
