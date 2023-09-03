@@ -19,6 +19,8 @@ pub enum Error {
     UnalignedAccess,
     /// Decoded a 32-bit instruction as a 16-bit instruction
     WideInstruction,
+    /// We don't understand this special register
+    UnknownSpecialRegister(u8),
 }
 
 /// Describes a block of 32-bit memory.
@@ -299,22 +301,45 @@ pub enum Instruction {
         /// What offset to apply to the base address
         imm32: u32,
     },
+    /// `LDRB <Rt>,[<Rn>{,#<imm5>}]`
+    LdrbImm {
+        /// Which register to load into
+        rt: Register,
+        /// Which register contains the base address to read from
+        rn: Register,
+        /// What offset to apply to the base address
+        imm5: u8,
+    },
     // =======================================================================
     // Stack Instructions
     // =======================================================================`
     /// `PUSH {<register list>}`
     Push {
         /// A bitmask of registers (R7 to R0) to push
-        register_list: u8,
+        register_list: RegisterList,
         /// Also push LR
         m: bool,
     },
     /// `POP {<register list>}`
     Pop {
         /// A bitmask of registers (R7 to R0) to pop
-        register_list: u8,
+        register_list: RegisterList,
         /// Also pop LR
         p: bool,
+    },
+    /// `LDMIA <Rn>!,{<register list>}`
+    Ldmia {
+        /// Base address to load from
+        rn: Register,
+        /// Register list
+        register_list: RegisterList,
+    },
+    /// `STMIA <Rn>!,{<register list>}`
+    Stmia {
+        /// Base address to save to
+        rn: Register,
+        /// Register list
+        register_list: RegisterList,
     },
     /// `ADD <Rd>,SP,#<imm8>`
     AddSpT1 {
@@ -368,6 +393,13 @@ pub enum Instruction {
         /// Which register to get the second value from
         rm: Register,
     },
+    /// `ADCS <Rdn>,<Rm>`
+    AdcsReg {
+        /// Which register to add to
+        rdn: Register,
+        /// Which register to get the value from
+        rm: Register,
+    },
     /// `SUBS <Rd>,<Rn>,#<imm3>`
     SubsImm {
         /// Which register to store the result in
@@ -385,6 +417,13 @@ pub enum Instruction {
         rn: Register,
         /// Which register to get the second value from
         rm: Register,
+    },
+    /// `RSBS <Rd>,<Rn>,#0`
+    RsbImm {
+        /// Which register to store the result in
+        rd: Register,
+        /// Which register to get the value from
+        rn: Register,
     },
     /// `LSLS <Rd>,<Rm>,#<imm>`
     LslsImm {
@@ -411,6 +450,13 @@ pub enum Instruction {
         /// How many bits to shift
         imm5: u8,
     },
+    /// `LSRS <Rdn>,<Rm>
+    LsrsReg {
+        /// Which register to shift
+        rdn: Register,
+        /// How many bits to shift (read from bottom byte)
+        rm: Register,
+    },
     // =======================================================================
     // Logical Instructions
     // =======================================================================
@@ -435,6 +481,13 @@ pub enum Instruction {
         /// The right hand register for the operation
         rm: Register,
     },
+    /// `ORRS <Rdn>,<Rm>`
+    OrrsReg {
+        /// The left hand register for the operation, and destination
+        rdn: Register,
+        /// The right hand register for the operation
+        rm: Register,
+    },
     // =======================================================================
     // Other Instructions
     // =======================================================================
@@ -442,6 +495,25 @@ pub enum Instruction {
     Breakpoint {
         /// The 8-bit signed immediate value
         imm8: u8,
+    },
+    /// `MRS <Rd>,<spec_reg>`
+    Mrs {
+        /// Which register to read from
+        rd: Register,
+        /// Which special register to write to
+        sys_m: u8,
+    },
+    /// `MSR <Rn>,<spec_reg>`
+    Msr {
+        /// Which register to write to
+        rn: Register,
+        /// Which special register to read from
+        sys_m: u8,
+    },
+    /// `CPSID i` or `CPSIE i`
+    Cps {
+        /// `true` to disable interrupts, `false` to enable
+        im: bool,
     },
 }
 
@@ -460,20 +532,11 @@ impl std::fmt::Display for Instruction {
             Instruction::StrbImm { rt, rn, imm5 } => write!(f, "STRB {},[{},#{}]", rt, rn, imm5),
             Instruction::LdrLiteral { rt, imm32 } => write!(f, "LDR {},[PC,#{}]", rt, imm32),
             Instruction::LdrImm { rt, rn, imm32 } => write!(f, "LDR {},[{},#{}]", rt, rn, imm32),
+            Instruction::LdrbImm { rt, rn, imm5 } => write!(f, "LDRB {},[{},#{}]", rt, rn, imm5),
             Instruction::Push { register_list, m } => {
-                let mut first = true;
-                write!(f, "PUSH {{")?;
-                for register in [7, 6, 5, 4, 3, 2, 1, 0] {
-                    if (*register_list & 1 << register) != 0 {
-                        if !first {
-                            write!(f, ",")?;
-                        }
-                        first = false;
-                        write!(f, "R{}", register)?;
-                    }
-                }
+                write!(f, "PUSH {{{}", register_list)?;
                 if *m {
-                    if !first {
+                    if !register_list.is_empty() {
                         write!(f, ",")?;
                     }
                     write!(f, "LR")?;
@@ -481,24 +544,20 @@ impl std::fmt::Display for Instruction {
                 write!(f, "}}")
             }
             Instruction::Pop { register_list, p } => {
-                let mut first = true;
-                write!(f, "POP {{")?;
-                for register in [7, 6, 5, 4, 3, 2, 1, 0] {
-                    if (*register_list & 1 << register) != 0 {
-                        if !first {
-                            write!(f, ",")?;
-                        }
-                        first = false;
-                        write!(f, "R{}", register)?;
-                    }
-                }
+                write!(f, "POP {{{}", register_list)?;
                 if *p {
-                    if !first {
+                    if !register_list.is_empty() {
                         write!(f, ",")?;
                     }
                     write!(f, "PC")?;
                 }
                 write!(f, "}}")
+            }
+            Instruction::Ldmia { rn, register_list } => {
+                write!(f, "LDMIA {}!,{{{}}}", rn, register_list)
+            }
+            Instruction::Stmia { rn, register_list } => {
+                write!(f, "STMIA {}!,{{{}}}", rn, register_list)
             }
             Instruction::AddSpT1 { rd, imm32 } => write!(f, "ADD {},SP,#{}", rd, imm32),
             Instruction::AddSpImm { imm32 } => write!(f, "ADD SP,#{}", imm32),
@@ -507,54 +566,62 @@ impl std::fmt::Display for Instruction {
             Instruction::StrSpImm { rt, imm32 } => write!(f, "STR {},[SP,#{}]", rt, imm32),
             Instruction::AddsImm { rd, rn, imm3 } => write!(f, "ADDS {},{},#{}", rd, rn, imm3),
             Instruction::AddsReg { rd, rn, rm } => write!(f, "ADDS {},{},{}", rd, rn, rm),
+            Instruction::AdcsReg { rdn, rm } => write!(f, "ADCS {},{}", rdn, rm),
             Instruction::SubsImm { rd, rn, imm3 } => write!(f, "SUBS {},{},#{}", rd, rn, imm3),
             Instruction::SubsReg { rd, rn, rm } => write!(f, "SUBS {},{},{}", rd, rn, rm),
+            Instruction::RsbImm { rd, rn } => write!(f, "RSBS {},{},#0", rd, rn),
             Instruction::LslsImm { rd, rm, imm5 } => write!(f, "LSLS {},{},#{}", rd, rm, imm5),
             Instruction::LslsReg { rdn, rm } => write!(f, "LSLS {},{}", rdn, rm),
             Instruction::LsrsImm { rd, rm, imm5 } => write!(f, "LSRS {},{},#{}", rd, rm, imm5),
+            Instruction::LsrsReg { rdn, rm } => write!(f, "LSRS {},{}", rdn, rm),
             Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
             Instruction::CmpImm { rn, imm32 } => write!(f, "CMP {},#{}", rn, imm32),
             Instruction::AndsReg { rdn, rm } => write!(f, "ANDS {},{}", rdn, rm),
+            Instruction::OrrsReg { rdn, rm } => write!(f, "ORRS {},{}", rdn, rm),
             Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{:02x}", imm8),
+            Instruction::Mrs { rd, sys_m } => write!(f, "MRS {},{}", rd, sys_m),
+            Instruction::Msr { rn, sys_m } => write!(f, "MSR {},{}", rn, sys_m),
+            Instruction::Cps { im } => write!(f, "CPSI{} i", if *im { "D" } else { "E" }),
         }
     }
 }
 
 /// Identifies a register in our CPU
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Register {
     /// Register R0
-    R0,
+    R0 = 0,
     /// Register R1
-    R1,
+    R1 = 1,
     /// Register R2
-    R2,
+    R2 = 2,
     /// Register R3
-    R3,
+    R3 = 3,
     /// Register R4
-    R4,
+    R4 = 4,
     /// Register R5
-    R5,
+    R5 = 5,
     /// Register R6
-    R6,
+    R6 = 6,
     /// Register R7
-    R7,
+    R7 = 7,
     /// Register R8
-    R8,
+    R8 = 8,
     /// Register R9
-    R9,
+    R9 = 9,
     /// Register R10
-    R10,
+    R10 = 10,
     /// Register R11
-    R11,
+    R11 = 11,
     /// Register R12
-    R12,
+    R12 = 12,
     /// Link Register
-    Lr,
+    Lr = 13,
     /// Stack Pointer
-    Sp,
+    Sp = 14,
     /// Program Counter
-    Pc,
+    Pc = 15,
 }
 
 impl std::fmt::Display for Register {
@@ -607,6 +674,47 @@ impl From<u8> for Register {
     }
 }
 
+/// A set of registers, from R0 to R7
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub struct RegisterList(u8);
+
+impl RegisterList {
+    /// Create a new register list
+    ///
+    /// The R0 bit is the least significant bit and the R7 bit is the most
+    /// significant bit.
+    pub fn new(value: u8) -> RegisterList {
+        RegisterList(value)
+    }
+
+    /// Does this list have any bits set?
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Is this register in this list?
+    pub fn is_set(self, register: Register) -> bool {
+        let bit = register as u8;
+        (self.0 & (1 << bit)) != 0
+    }
+}
+
+impl std::fmt::Display for RegisterList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut first = true;
+        for reg in 0..=7 {
+            if (self.0 & (1 << reg)) != 0 {
+                if !first {
+                    write!(f, ",")?;
+                }
+                first = false;
+                write!(f, "R{}", reg)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// CPU execution modes
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -629,6 +737,7 @@ pub struct Armv6M {
     breakpoint: Option<u8>,
     aspr: u32,
     mode: Mode,
+    primask: u32,
 }
 
 impl Armv6M {
@@ -636,6 +745,8 @@ impl Armv6M {
     const FLAG_Z: u32 = 1 << 30;
     const FLAG_C: u32 = 1 << 29;
     const FLAG_V: u32 = 1 << 28;
+
+    const SYS_M_PRIMASK: u8 = 0b0001_0000;
 
     /// Create a new CPU.
     ///
@@ -757,6 +868,15 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5,
             })
+        } else if (word >> 11) == 0b01111 {
+            let imm5 = ((word >> 6) & 0x1F) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::LdrbImm {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                imm5,
+            })
         } else if (word >> 11) == 0b01100 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
@@ -803,14 +923,34 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm32: u32::from(imm8),
             })
+        } else if (word >> 11) == 0b11000 {
+            let register_list = (word & 0xFF) as u8;
+            let rn = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::Stmia {
+                rn: Register::from(rn),
+                register_list: RegisterList::new(register_list),
+            })
+        } else if (word >> 11) == 0b11001 {
+            let register_list = (word & 0xFF) as u8;
+            let rn = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::Ldmia {
+                rn: Register::from(rn),
+                register_list: RegisterList::new(register_list),
+            })
         } else if (word >> 9) == 0b1011010 {
             let m = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
-            Ok(Instruction::Push { register_list, m })
+            Ok(Instruction::Push {
+                register_list: RegisterList::new(register_list),
+                m,
+            })
         } else if (word >> 9) == 0b1011110 {
             let p = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
-            Ok(Instruction::Pop { register_list, p })
+            Ok(Instruction::Pop {
+                register_list: RegisterList::new(register_list),
+                p,
+            })
         } else if (word >> 9) == 0b0001110 {
             let imm3 = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
@@ -880,6 +1020,13 @@ impl Armv6M {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
+        } else if (word >> 6) == 0b0100000011 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rdn = (word & 0b111) as u8;
+            Ok(Instruction::LsrsReg {
+                rdn: Register::from(rdn),
+                rm: Register::from(rm),
+            })
         } else if (word >> 6) == 0b0100001010 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rn = (word & 0b111) as u8;
@@ -894,6 +1041,30 @@ impl Armv6M {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
+        } else if (word >> 6) == 0b0100001100 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rdn = (word & 0b111) as u8;
+            Ok(Instruction::OrrsReg {
+                rdn: Register::from(rdn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 6) == 0b0100001001 {
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::RsbImm {
+                rd: Register::from(rd),
+                rn: Register::from(rn),
+            })
+        } else if (word >> 6) == 0b0100000101 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rdn = (word & 0b111) as u8;
+            Ok(Instruction::AdcsReg {
+                rdn: Register::from(rdn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 5) == 0b10110110011 {
+            let im = ((word >> 4) & 1) != 0;
+            Ok(Instruction::Cps { im })
         } else {
             Err(Error::InvalidInstruction(word))
         }
@@ -917,6 +1088,20 @@ impl Armv6M {
             let imm32 = s_prefix | i1 | i2 | (imm10 << 12) | (imm11 << 1);
             Ok(Instruction::BranchLink {
                 imm32: imm32 as i32,
+            })
+        } else if (word1 == 0b1111001111101111) && (word2 >> 12) == 0b1000 {
+            let sys_m = (word2 & 0xFF) as u8;
+            let rd = ((word2 >> 8) & 0b1111) as u8;
+            Ok(Instruction::Mrs {
+                rd: Register::from(rd),
+                sys_m,
+            })
+        } else if (word1 >> 4) == 0b111100111000 && (word2 >> 8) == 0b10001000 {
+            let sys_m = (word2 & 0xFF) as u8;
+            let rn = (word1 & 0b1111) as u8;
+            Ok(Instruction::Msr {
+                rn: Register::from(rn),
+                sys_m,
             })
         } else {
             Err(Error::InvalidInstruction32(word1, word2))
@@ -1017,6 +1202,12 @@ impl Armv6M {
                 let value = memory.load_u32(offset_addr)?;
                 self.store_reg(rt, value);
             }
+            Instruction::LdrbImm { rt, rn, imm5 } => {
+                let addr = self.fetch_reg(rn);
+                let offset_addr = addr.wrapping_add(u32::from(imm5));
+                let value = memory.load_u32(offset_addr)? & 0xFF;
+                self.store_reg(rt, value);
+            }
             // =======================================================================
             // Stack Instructions
             // =======================================================================`
@@ -1025,22 +1216,48 @@ impl Armv6M {
                     let lr = self.lr;
                     self.push_stack(lr, memory)?;
                 }
-                for register in [7, 6, 5, 4, 3, 2, 1, 0] {
-                    if (register_list & 1 << register) != 0 {
-                        let value = self.fetch_reg(Register::from(register));
+                for register in (0..=7).rev().map(Register::from) {
+                    if register_list.is_set(register) {
+                        let value = self.fetch_reg(register);
                         self.push_stack(value, memory)?;
                     }
                 }
             }
             Instruction::Pop { register_list, p } => {
-                for register in [0, 1, 2, 3, 4, 5, 6, 7] {
-                    if (register_list & 1 << register) != 0 {
+                for register in (0..=7).map(Register::from) {
+                    if register_list.is_set(register) {
                         let value = self.pop_stack(memory)?;
-                        self.store_reg(Register::from(register), value);
+                        self.store_reg(register, value);
                     }
                 }
                 if p {
                     self.pc = self.pop_stack(memory)? & !1;
+                }
+            }
+            Instruction::Ldmia { rn, register_list } => {
+                let mut base = self.fetch_reg(rn);
+                for register in (0..=7).map(Register::from) {
+                    if register_list.is_set(register) {
+                        let value = memory.load_u32(base)?;
+                        base = base.wrapping_add(4);
+                        self.store_reg(register, value);
+                    }
+                }
+                if !register_list.is_set(rn) {
+                    self.store_reg(rn, base);
+                }
+            }
+            Instruction::Stmia { rn, register_list } => {
+                let mut base = self.fetch_reg(rn);
+                for register in (0..=7).map(Register::from) {
+                    if register_list.is_set(register) {
+                        let value = self.fetch_reg(register);
+                        memory.store_u32(base, value)?;
+                        base = base.wrapping_add(4);
+                    }
+                }
+                if !register_list.is_set(rn) {
+                    self.store_reg(rn, base);
                 }
             }
             Instruction::AddSpT1 { rd, imm32 } => {
@@ -1089,6 +1306,17 @@ impl Armv6M {
                 self.set_v(overflow);
                 self.store_reg(rd, result);
             }
+            Instruction::AdcsReg { rdn, rm } => {
+                let value1 = self.fetch_reg(rdn);
+                let value2 = self.fetch_reg(rm);
+                let (result, carry_out, overflow) =
+                    Self::add_with_carry(value1, value2, self.is_c());
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+                self.set_v(overflow);
+                self.store_reg(rdn, result);
+            }
             Instruction::SubsImm { rd, rn, imm3 } => {
                 let value1 = self.fetch_reg(rn);
                 let value2 = u32::from(imm3);
@@ -1103,6 +1331,15 @@ impl Armv6M {
                 let value1 = self.fetch_reg(rn);
                 let value2 = self.fetch_reg(rm);
                 let (result, carry_out, overflow) = Self::add_with_carry(value1, !value2, true);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+                self.set_v(overflow);
+                self.store_reg(rd, result);
+            }
+            Instruction::RsbImm { rd, rn } => {
+                let value1 = self.fetch_reg(rn);
+                let (result, carry_out, overflow) = Self::add_with_carry(!value1, 0, true);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
                 self.set_c(carry_out);
@@ -1151,6 +1388,16 @@ impl Armv6M {
                 self.set_z(result == 0);
                 self.set_c(carry_out);
             }
+            Instruction::LsrsReg { rdn, rm } => {
+                let value = self.fetch_reg(rdn);
+                let shift_n = self.fetch_reg(rm) & 0xFF;
+                let result = value >> shift_n;
+                let carry_out = (value & (1 << (shift_n - 1))) != 0;
+                self.store_reg(rdn, result);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+            }
             // =======================================================================
             // Logical Instructions
             // =======================================================================
@@ -1179,11 +1426,55 @@ impl Armv6M {
                 self.set_z(result == 0);
                 self.store_reg(rdn, result);
             }
+            Instruction::OrrsReg { rdn, rm } => {
+                let value_m = self.fetch_reg(rm);
+                let value_n = self.fetch_reg(rdn);
+                let result = value_n | value_m;
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.store_reg(rdn, result);
+            }
             // =======================================================================
             // Other Instructions
             // =======================================================================
             Instruction::Breakpoint { imm8 } => {
+                // Wide instruction
+                self.pc = self.pc.wrapping_add(2);
                 self.breakpoint = Some(imm8);
+            }
+            Instruction::Mrs { rd, sys_m } => {
+                // Wide instruction
+                self.pc = self.pc.wrapping_add(2);
+
+                match sys_m {
+                    Self::SYS_M_PRIMASK => {
+                        self.primask = self.fetch_reg(rd);
+                    }
+                    _ => {
+                        return Err(Error::UnknownSpecialRegister(sys_m));
+                    }
+                }
+            }
+            Instruction::Msr { rn, sys_m } => {
+                // Wide instruction
+                self.pc = self.pc.wrapping_add(2);
+                match sys_m {
+                    Self::SYS_M_PRIMASK => {
+                        self.store_reg(rn, self.primask);
+                    }
+                    _ => {
+                        return Err(Error::UnknownSpecialRegister(sys_m));
+                    }
+                }
+            }
+            Instruction::Cps { im } => {
+                if im {
+                    // disable
+                    self.primask |= 1;
+                } else {
+                    // enable
+                    self.primask &= !1;
+                }
             }
         }
         Ok(())
@@ -1873,6 +2164,37 @@ mod test {
         // R1 loaded from address 4 + (1 * 4) = 8
         assert_eq!(0x12345678, cpu.regs[1]);
     }
+    #[test]
+    fn ldrb_immediate_instruction() {
+        let i = Armv6M::decode(0x782C);
+        assert_eq!(
+            Ok(Instruction::LdrbImm {
+                rt: Register::R4,
+                rn: Register::R5,
+                imm5: 0
+            }),
+            i
+        );
+        assert_eq!("LDRB R4,[R5,#0]", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn ldrb_immediate_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0, 0, 0x12345678, 0, 0, 0, 0, 0];
+        cpu.regs[0] = 4;
+        cpu.execute(
+            Instruction::LdrbImm {
+                rt: Register::R1,
+                rn: Register::R0,
+                imm5: 4,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // R1 loaded from address 4 + (1 * 4) = 8
+        assert_eq!(0x78, cpu.regs[1]);
+    }
     // =======================================================================
     // Stack Instructions
     // =======================================================================`
@@ -1882,7 +2204,7 @@ mod test {
         assert_eq!(
             // Push {LR, R7}
             Ok(Instruction::Push {
-                register_list: 0x80,
+                register_list: RegisterList::new(0x80),
                 m: true
             }),
             i
@@ -1892,12 +2214,12 @@ mod test {
         let i = Armv6M::decode(0xb4FF);
         assert_eq!(
             Ok(Instruction::Push {
-                register_list: 0xFF,
+                register_list: RegisterList::new(0xFF),
                 m: false
             }),
             i
         );
-        assert_eq!("PUSH {R7,R6,R5,R4,R3,R2,R1,R0}", format!("{}", i.unwrap()));
+        assert_eq!("PUSH {R0,R1,R2,R3,R4,R5,R6,R7}", format!("{}", i.unwrap()));
     }
 
     #[test]
@@ -1915,7 +2237,7 @@ mod test {
         cpu.store_reg(Register::Lr, 8);
         cpu.execute(
             Instruction::Push {
-                register_list: 0x55,
+                register_list: RegisterList::new(0x55),
                 m: false,
             },
             &mut ram,
@@ -1928,9 +2250,8 @@ mod test {
     fn pop_instruction() {
         let i = Armv6M::decode(0xbd80);
         assert_eq!(
-            // Pop {LR, R7}
             Ok(Instruction::Pop {
-                register_list: 0x80,
+                register_list: RegisterList::new(0x80),
                 p: true
             }),
             i
@@ -1940,12 +2261,12 @@ mod test {
         let i = Armv6M::decode(0xBCFF);
         assert_eq!(
             Ok(Instruction::Pop {
-                register_list: 0xFF,
+                register_list: RegisterList::new(0xFF),
                 p: false
             }),
             i
         );
-        assert_eq!("POP {R7,R6,R5,R4,R3,R2,R1,R0}", format!("{}", i.unwrap()));
+        assert_eq!("POP {R0,R1,R2,R3,R4,R5,R6,R7}", format!("{}", i.unwrap()));
     }
 
     #[test]
@@ -1954,7 +2275,7 @@ mod test {
         let mut ram = [15, 15, 15, 15, 0, 2, 4, 6];
         cpu.execute(
             Instruction::Pop {
-                register_list: 0x55,
+                register_list: RegisterList::new(0x55),
                 p: false,
             },
             &mut ram,
@@ -1964,6 +2285,75 @@ mod test {
         assert_eq!(2, cpu.regs[2]);
         assert_eq!(4, cpu.regs[4]);
         assert_eq!(6, cpu.regs[6]);
+    }
+
+    #[test]
+    fn ldmia_instruction() {
+        let i = Armv6M::decode(0xc938);
+        assert_eq!(
+            Ok(Instruction::Ldmia {
+                rn: Register::R1,
+                register_list: RegisterList::new(0x38),
+            }),
+            i
+        );
+        assert_eq!("LDMIA R1!,{R3,R4,R5}", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn ldmia_operation() {
+        let mut cpu = Armv6M::new(16, 0x0);
+        let mut ram = [1, 2, 3, 4, 5, 6, 7, 8];
+        cpu.regs[0] = 4;
+        cpu.execute(
+            Instruction::Ldmia {
+                // R1, R3, R5, R7
+                register_list: RegisterList::new(0xAA),
+                rn: Register::R0,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(4 + 16, cpu.regs[0]);
+        assert_eq!(2, cpu.regs[1]);
+        assert_eq!(3, cpu.regs[3]);
+        assert_eq!(4, cpu.regs[5]);
+        assert_eq!(5, cpu.regs[7]);
+    }
+
+    #[test]
+    fn stmia_instruction() {
+        let i = Armv6M::decode(0xc038);
+        assert_eq!(
+            Ok(Instruction::Stmia {
+                rn: Register::R0,
+                register_list: RegisterList::new(0x38),
+            }),
+            i
+        );
+        assert_eq!("STMIA R0!,{R3,R4,R5}", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn stmia_operation() {
+        let mut cpu = Armv6M::new(16, 0x0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[1] = 2;
+        cpu.regs[3] = 3;
+        cpu.regs[5] = 4;
+        cpu.regs[7] = 5;
+        cpu.execute(
+            Instruction::Stmia {
+                // R1, R3, R5, R7
+                register_list: RegisterList::new(0xAA),
+                rn: Register::R0,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(4 + 16, cpu.regs[0]);
+        assert_eq!([0, 2, 3, 4, 5, 0, 0, 0], ram);
     }
 
     #[test]
@@ -2139,7 +2529,6 @@ mod test {
         );
         assert_eq!("ADDS R0,R0,R1", format!("{}", i.unwrap()));
     }
-
     #[test]
     fn adds_reg_operation() {
         let sp = 16;
@@ -2158,6 +2547,40 @@ mod test {
         )
         .unwrap();
         assert_eq!(0x12345679, cpu.regs[0]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(!cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+    #[test]
+    fn adcs_reg_instruction() {
+        let i = Armv6M::decode(0x4148);
+        assert_eq!(
+            Ok(Instruction::AdcsReg {
+                rdn: Register::R0,
+                rm: Register::R1,
+            }),
+            i
+        );
+        assert_eq!("ADCS R0,R1", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn adcs_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[2] = 1;
+        cpu.set_c(true);
+        cpu.execute(
+            Instruction::AdcsReg {
+                rdn: Register::R0,
+                rm: Register::R2,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(6, cpu.regs[0]);
         assert!(!cpu.is_n());
         assert!(!cpu.is_z());
         assert!(!cpu.is_c());
@@ -2236,6 +2659,38 @@ mod test {
         assert!(!cpu.is_v());
     }
     #[test]
+    fn rsb_imm_instruction() {
+        let i = Armv6M::decode(0x4241);
+        assert_eq!(
+            Ok(Instruction::RsbImm {
+                rd: Register::R1,
+                rn: Register::R0,
+            }),
+            i
+        );
+        assert_eq!("RSBS R1,R0,#0", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn rsb_imm_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.execute(
+            Instruction::RsbImm {
+                rd: Register::R1,
+                rn: Register::R0,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0xFFFF_FFFC, cpu.regs[1]);
+        assert!(cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(!cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+    #[test]
     fn lsls_imm_instruction() {
         let i = Armv6M::decode(0x0081);
         // lsls	r1, r0, #2
@@ -2249,7 +2704,6 @@ mod test {
         );
         assert_eq!("LSLS R1,R0,#2", format!("{}", i.unwrap()));
     }
-
     #[test]
     fn lsls_imm_operation() {
         let sp = 16;
@@ -2284,7 +2738,6 @@ mod test {
         );
         assert_eq!("LSLS R4,R3", format!("{}", i.unwrap()));
     }
-
     #[test]
     fn lsls_reg_operation() {
         let sp = 16;
@@ -2307,9 +2760,8 @@ mod test {
         assert!(!cpu.is_v());
     }
     #[test]
-    fn lsrs_instruction() {
+    fn lsrs_imm_instruction() {
         let i = Armv6M::decode(0x0881);
-        // lsrs	r1, r0, #2
         assert_eq!(
             Ok(Instruction::LsrsImm {
                 rd: Register::R1,
@@ -2322,7 +2774,7 @@ mod test {
     }
 
     #[test]
-    fn lsrs_operation() {
+    fn lsrs_imm_operation() {
         let sp = 16;
         let mut cpu = Armv6M::new(sp, 0);
         let mut ram: [u32; 8] = [0; 8];
@@ -2342,7 +2794,40 @@ mod test {
         assert!(cpu.is_c());
         assert!(!cpu.is_v());
     }
+    #[test]
+    fn lsrs_reg_instruction() {
+        let i = Armv6M::decode(0x40dc);
+        assert_eq!(
+            Ok(Instruction::LsrsReg {
+                rdn: Register::R4,
+                rm: Register::R3,
+            }),
+            i
+        );
+        assert_eq!("LSRS R4,R3", format!("{}", i.unwrap()));
+    }
 
+    #[test]
+    fn lsrs_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram: [u32; 8] = [0; 8];
+        cpu.regs[4] = 0x12345678;
+        cpu.regs[3] = 4;
+        cpu.execute(
+            Instruction::LsrsReg {
+                rdn: Register::R4,
+                rm: Register::R3,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x01234567, cpu.regs[4]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(cpu.is_c());
+        assert!(!cpu.is_v());
+    }
     // =======================================================================
     // Logical Instructions
     // =======================================================================
@@ -2535,6 +3020,35 @@ mod test {
         .unwrap();
         assert_eq!(cpu.regs[6], 0x12000078);
     }
+    #[test]
+    fn orrs_reg_instruction() {
+        let i = Armv6M::decode(0x431e);
+        assert_eq!(
+            Ok(Instruction::OrrsReg {
+                rdn: Register::R6,
+                rm: Register::R3,
+            }),
+            i
+        );
+        assert_eq!("ORRS R6,R3", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn orrs_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[6] = 0x12345678;
+        cpu.regs[3] = 0xFF0000FF;
+        cpu.execute(
+            Instruction::OrrsReg {
+                rdn: Register::R6,
+                rm: Register::R3,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(cpu.regs[6], 0xFF3456FF);
+    }
     // =======================================================================
     // Other Instructions
     // =======================================================================
@@ -2543,6 +3057,90 @@ mod test {
         let i = Armv6M::decode(0xbecc);
         assert_eq!(Ok(Instruction::Breakpoint { imm8: 0xCC }), i);
         assert_eq!("BKPT 0xcc", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn bkpt_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.execute(Instruction::Breakpoint { imm8: 0xCC }, &mut ram)
+            .unwrap();
+        assert_eq!(Some(0xCC), cpu.breakpoint());
+    }
+
+    #[test]
+    fn mrs_instruction() {
+        let i = Armv6M::decode32(0xf3ef, 0x8010);
+        assert_eq!(
+            Ok(Instruction::Mrs {
+                rd: Register::R0,
+                sys_m: Armv6M::SYS_M_PRIMASK
+            }),
+            i
+        );
+        assert_eq!("MRS R0,16", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn mrs_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 0x12345678;
+        cpu.execute(
+            Instruction::Mrs {
+                rd: Register::R0,
+                sys_m: Armv6M::SYS_M_PRIMASK,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x12345678, cpu.primask);
+    }
+
+    #[test]
+    fn msr_instruction() {
+        let i = Armv6M::decode32(0xf380, 0x8810);
+        assert_eq!(
+            Ok(Instruction::Msr {
+                rn: Register::R0,
+                sys_m: Armv6M::SYS_M_PRIMASK
+            }),
+            i
+        );
+        assert_eq!("MSR R0,16", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn msr_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.primask = 0x12345678;
+        cpu.execute(
+            Instruction::Msr {
+                rn: Register::R0,
+                sys_m: Armv6M::SYS_M_PRIMASK,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x12345678, cpu.regs[0]);
+    }
+
+    #[test]
+    fn cpsid_instruction() {
+        let i = Armv6M::decode(0xb672);
+        assert_eq!(Ok(Instruction::Cps { im: true }), i);
+        assert_eq!("CPSID i", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn cpsie_instruction() {
+        let i = Armv6M::decode(0xb662);
+        assert_eq!(Ok(Instruction::Cps { im: false }), i);
+        assert_eq!("CPSIE i", format!("{}", i.unwrap()));
     }
 }
 
