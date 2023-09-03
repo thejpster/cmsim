@@ -428,6 +428,13 @@ pub enum Instruction {
         /// The right hand immediate value to compare
         imm32: u32,
     },
+    /// `ANDS <Rdn>,<Rm>`
+    AndsReg {
+        /// The left hand register for the operation, and destination
+        rdn: Register,
+        /// The right hand register for the operation
+        rm: Register,
+    },
     // =======================================================================
     // Other Instructions
     // =======================================================================
@@ -507,6 +514,7 @@ impl std::fmt::Display for Instruction {
             Instruction::LsrsImm { rd, rm, imm5 } => write!(f, "LSRS {},{},#{}", rd, rm, imm5),
             Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
             Instruction::CmpImm { rn, imm32 } => write!(f, "CMP {},#{}", rn, imm32),
+            Instruction::AndsReg { rdn, rm } => write!(f, "ANDS {},{}", rdn, rm),
             Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{:02x}", imm8),
         }
     }
@@ -876,8 +884,15 @@ impl Armv6M {
             let rm = ((word >> 3) & 0b111) as u8;
             let rn = (word & 0b111) as u8;
             Ok(Instruction::CmpReg {
-                rm: Register::from(rm),
                 rn: Register::from(rn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 6) == 0b0100000000 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rdn = (word & 0b111) as u8;
+            Ok(Instruction::AndsReg {
+                rdn: Register::from(rdn),
+                rm: Register::from(rm),
             })
         } else {
             Err(Error::InvalidInstruction(word))
@@ -1155,6 +1170,14 @@ impl Armv6M {
                 self.set_z(result == 0);
                 self.set_c(carry);
                 self.set_v(overflow);
+            }
+            Instruction::AndsReg { rdn, rm } => {
+                let value_m = self.fetch_reg(rm);
+                let value_n = self.fetch_reg(rdn);
+                let result = value_n & value_m;
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.store_reg(rdn, result);
             }
             // =======================================================================
             // Other Instructions
@@ -2335,7 +2358,6 @@ mod test {
         );
         assert_eq!("CMP R0,R1", format!("{}", i.unwrap()));
     }
-
     #[test]
     fn cmp_reg_operation() {
         static TEST_VALUES: &[i32] = &[
@@ -2456,7 +2478,6 @@ mod test {
         );
         assert_eq!("CMP R0,#5", format!("{}", i.unwrap()));
     }
-
     #[test]
     fn cmp_imm_operation() {
         let sp = 16;
@@ -2484,6 +2505,35 @@ mod test {
         assert_eq!(100 < 50, cpu.check_condition(Condition::Lt));
         // Z=1 | N!=V
         assert_eq!(100 <= 50, cpu.check_condition(Condition::Le));
+    }
+    #[test]
+    fn ands_reg_instruction() {
+        let i = Armv6M::decode(0x401e);
+        assert_eq!(
+            Ok(Instruction::AndsReg {
+                rdn: Register::R6,
+                rm: Register::R3,
+            }),
+            i
+        );
+        assert_eq!("ANDS R6,R3", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn ands_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[6] = 0x12345678;
+        cpu.regs[3] = 0xFF0000FF;
+        cpu.execute(
+            Instruction::AndsReg {
+                rdn: Register::R6,
+                rm: Register::R3,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(cpu.regs[6], 0x12000078);
     }
     // =======================================================================
     // Other Instructions
