@@ -351,13 +351,22 @@ pub enum Instruction {
     // Arithmetic Instructions
     // =======================================================================
     /// `ADDS <Rd>,<Rn>,#<imm3>`
-    Adds {
+    AddsImm {
         /// Which register to store the result in
         rd: Register,
         /// Which register to get the value from
         rn: Register,
         /// How much to add to <Rn>
         imm3: u8,
+    },
+    /// `ADDS <Rd>,<Rn>,<Rm>`
+    AddsReg {
+        /// Which register to store the result in
+        rd: Register,
+        /// Which register to get the first value from
+        rn: Register,
+        /// Which register to get the second value from
+        rm: Register,
     },
     /// `LSLS <Rx>,<Rx>,#<imm>`
     LslsImm {
@@ -464,7 +473,8 @@ impl std::fmt::Display for Instruction {
             Instruction::SubSpImm { imm32 } => write!(f, "SUB SP,#{}", imm32),
             Instruction::LdrSpImm { rt, imm32 } => write!(f, "LDR {},[SP,#{}]", rt, imm32),
             Instruction::StrSpImm { rt, imm32 } => write!(f, "STR {},[SP,#{}]", rt, imm32),
-            Instruction::Adds { rd, rn, imm3 } => write!(f, "ADDS {},{},#{}", rd, rn, imm3),
+            Instruction::AddsImm { rd, rn, imm3 } => write!(f, "ADDS {},{},#{}", rd, rn, imm3),
+            Instruction::AddsReg { rd, rn, rm } => write!(f, "ADDS {},{},{}", rd, rn, rm),
             Instruction::LslsImm { rd, rm, imm5 } => write!(f, "LSLS {},{},#{}", rd, rm, imm5),
             Instruction::LsrsImm { rd, rm, imm5 } => write!(f, "LSRS {},{},#{}", rd, rm, imm5),
             Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
@@ -654,7 +664,7 @@ impl Armv6M {
     /// `Error::WideInstruction` if you try and decode half of one.
     pub fn decode(word: u16) -> Result<Instruction, Error> {
         if (word >> 12) == 0b1101 {
-            let cond = ((word >> 8) & 0x0F) as u8;
+            let cond = ((word >> 8) & 0b1111) as u8;
             let imm8 = word as u8;
             Ok(Instruction::BranchConditional {
                 cond: Condition::from(cond),
@@ -766,13 +776,22 @@ impl Armv6M {
             let register_list = word as u8;
             Ok(Instruction::Pop { register_list, p })
         } else if (word >> 9) == 0b0001110 {
-            let imm3 = ((word >> 6) & 0x07) as u8;
+            let imm3 = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
-            Ok(Instruction::Adds {
+            Ok(Instruction::AddsImm {
                 rd: Register::from(rd),
                 rn: Register::from(rn),
                 imm3,
+            })
+        } else if (word >> 9) == 0b0001100 {
+            let rm = ((word >> 6) & 0b111) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::AddsReg {
+                rd: Register::from(rd),
+                rn: Register::from(rn),
+                rm: Register::from(rm),
             })
         } else if (word >> 8) == 0b10111110 {
             let imm8 = (word & 0xFF) as u8;
@@ -780,13 +799,13 @@ impl Armv6M {
         } else if (word >> 8) == 0b01000110 {
             let d: u8 = ((word >> 7) & 0b1) as u8;
             let rd = (d << 3) | (word & 0b111) as u8;
-            let rm: u8 = ((word >> 3) & 0x0F) as u8;
+            let rm: u8 = ((word >> 3) & 0b1111) as u8;
             Ok(Instruction::MovRegT1 {
                 rm: Register::from(rm),
                 rd: Register::from(rd),
             })
         } else if (word >> 7) == 0b010001110 {
-            let rm = ((word >> 3) & 0x0F) as u8;
+            let rm = ((word >> 3) & 0b1111) as u8;
             Ok(Instruction::BranchExchange {
                 rm: Register::from(rm),
             })
@@ -982,9 +1001,19 @@ impl Armv6M {
             // =======================================================================
             // Arithmetic Instructions
             // =======================================================================
-            Instruction::Adds { rd, rn, imm3 } => {
+            Instruction::AddsImm { rd, rn, imm3 } => {
                 let value1 = self.fetch_reg(rn);
                 let value2 = u32::from(imm3);
+                let (result, carry_out, overflow) = Self::add_with_carry(value1, value2, false);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+                self.set_v(overflow);
+                self.store_reg(rd, result);
+            }
+            Instruction::AddsReg { rd, rn, rm } => {
+                let value1 = self.fetch_reg(rn);
+                let value2 = self.fetch_reg(rm);
                 let (result, carry_out, overflow) = Self::add_with_carry(value1, value2, false);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
@@ -1950,10 +1979,10 @@ mod test {
     // Arithmetic Instructions
     // =======================================================================
     #[test]
-    fn adds_instruction() {
+    fn adds_imm_instruction() {
         let i = Armv6M::decode(0x1d00);
         assert_eq!(
-            Ok(Instruction::Adds {
+            Ok(Instruction::AddsImm {
                 rd: Register::R0,
                 rn: Register::R0,
                 imm3: 4
@@ -1964,17 +1993,54 @@ mod test {
     }
 
     #[test]
-    fn adds_operation() {
+    fn adds_imm_operation() {
         let sp = 16;
         let mut cpu = Armv6M::new(sp, 0);
         let mut ram = [0; 8];
         cpu.regs[0] = 4;
         cpu.regs[1] = 0x12345678;
         cpu.execute(
-            Instruction::Adds {
+            Instruction::AddsImm {
                 rd: Register::R0,
                 rn: Register::R1,
                 imm3: 1,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x12345679, cpu.regs[0]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(!cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+    #[test]
+    fn adds_reg_instruction() {
+        let i = Armv6M::decode(0x1840);
+        assert_eq!(
+            Ok(Instruction::AddsReg {
+                rd: Register::R0,
+                rn: Register::R0,
+                rm: Register::R1,
+            }),
+            i
+        );
+        assert_eq!("ADDS R0,R0,R1", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn adds_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[1] = 0x12345678;
+        cpu.regs[2] = 1;
+        cpu.execute(
+            Instruction::AddsReg {
+                rd: Register::R0,
+                rn: Register::R1,
+                rm: Register::R2,
             },
             &mut ram,
         )
