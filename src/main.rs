@@ -5,6 +5,8 @@
 //!
 //! 1024 KiB of ROM at 0x0000_0000 and 1024 KiB of SRAM at 0x2000_0000 are simulated.
 
+use std::io::prelude::*;
+
 use cmsim::Memory;
 
 struct Region {
@@ -31,7 +33,7 @@ impl cmsim::Memory for Region {
 /// Represents a basic UART, compatible with the one in QEMU
 ///
 /// Writes to standard out and reads from stdin.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 struct Uart {
     baud: u32,
     control: u32,
@@ -40,6 +42,14 @@ struct Uart {
 impl cmsim::Memory for Uart {
     fn load_u32(&self, addr: u32) -> Result<u32, cmsim::Error> {
         match addr {
+            0 => {
+                // Data in
+                Ok(0)
+            }
+            4 => {
+                // Status
+                Ok(0)
+            }
             8 => Ok(self.control),
             16 => Ok(self.baud),
             _ => Err(cmsim::Error::InvalidAddress(addr)),
@@ -47,8 +57,12 @@ impl cmsim::Memory for Uart {
     }
 
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), cmsim::Error> {
-        println!("UART register {}", addr);
+        eprintln!("UART register {}", addr);
         match addr {
+            0 => {
+                let mut out = std::io::stdout();
+                out.write_all(&[value as u8]).unwrap();
+            }
             8 => self.control = value,
             16 => self.baud = value,
             _ => {
@@ -101,7 +115,10 @@ fn main() {
         ram: Region {
             contents: vec![0u32; 256 * 1024].into(),
         },
-        uart: Default::default(),
+        uart: Uart {
+            baud: 0,
+            control: 0,
+        },
     };
 
     for (idx, b) in contents.iter().enumerate() {
@@ -110,16 +127,16 @@ fn main() {
 
     let sp = system.flash.load_u32(0).unwrap();
     let reset = system.flash.load_u32(4).unwrap();
-    println!("SP is 0x{:08x}, Reset is 0x{:08x}", sp, reset);
+    eprintln!("SP is 0x{:08x}, Reset is 0x{:08x}", sp, reset);
     let mut cpu = cmsim::Armv6M::new(sp, reset);
 
     let mut steps = 0;
     loop {
         cpu.step(&mut system).unwrap();
         steps += 1;
-        println!("Steps {}, CPU:\n{:08x?}", steps, cpu);
+        eprintln!("Steps {}, CPU:\n{:08x?}", steps, cpu);
         if let Some(arg) = cpu.breakpoint() {
-            println!("Got breakpoint 0x{:02X}", arg);
+            eprintln!("Got breakpoint 0x{:02X}", arg);
             if arg == 0xAB {
                 // Semihosting
                 let op_num = cpu.register(cmsim::Register::R0);
@@ -127,7 +144,7 @@ fn main() {
                 match op_num {
                     0x18 => {
                         // SYS_EXIT
-                        println!("SYS_EXIT...");
+                        eprintln!("SYS_EXIT...");
                         std::process::exit(0);
                     }
                     _ => {
