@@ -229,7 +229,12 @@ pub enum Instruction {
     // =======================================================================
     // Branch Instructions
     // =======================================================================
-    /// `B <label>`
+    /// Branch.
+    ///
+    /// Causes a branch to a target address. The instruction set cannot be
+    /// changed by this function.
+    ///
+    /// `B <label>`, where `<label>` converts to a PC-relative offset.
     Branch {
         /// The PC-relative signed offset.
         ///
@@ -237,7 +242,12 @@ pub enum Instruction {
         /// incremented twice before this is executed.
         imm32: i32,
     },
-    /// `B.xx <label>`
+    /// Conditional Branch.
+    ///
+    /// Causes a branch to a target address if a condition is met. The
+    /// instruction set cannot be changed by this function.
+    ///
+    /// `B.xx <label>`, where `<label>` converts to a PC-relative offset.
     BranchConditional {
         /// The condition code (e.g. only branch if Zero)
         cond: Condition,
@@ -247,7 +257,12 @@ pub enum Instruction {
         /// incremented twice before this is executed.
         imm32: i32,
     },
-    /// `BL <label>`
+    /// Branch with Link (Immediate).
+    ///
+    /// Calls a subroutine at a PC-relative address. The instruction set cannot
+    /// be changed by this function.
+    ///
+    /// `BL <label>`, where `<label>` converts to a PC-relative offset.
     BranchLink {
         /// The PC-relative signed offset.
         ///
@@ -255,87 +270,149 @@ pub enum Instruction {
         /// incremented twice before this is executed.
         imm32: i32,
     },
+    /// Branch and Exchange.
+    ///
+    /// Causes a branch to an address and instruction set specified by a
+    /// register.
+    ///
     /// `BX <Rm>`
     BranchExchange {
-        /// Which register contains the new PC
+        /// The register that contains the new PC
         rm: Register,
     },
+    /// Branch with Link and Exchange.
+    ///
+    /// Calls a subroutine at an address and instruction set specified by a
+    /// register.
+    ///
     /// `BLX <Rm>`
     BranchLinkExchange {
-        /// Which register contains the new PC
+        /// The register that contains the new PC
         rm: Register,
     },
     // =======================================================================
     // Move Instructions
     // =======================================================================
-    /// `MOV <Rd>,#<imm8>`
-    MovImm {
-        /// Which register to move the value into
+    /// Move and Set (Immediate).
+    ///
+    /// Writes an immediate value to the destination register. Condition flags
+    /// are updated.
+    ///
+    /// `MOVS <Rd>,#<imm8>`
+    MovsImm {
+        /// The destination register
         rd: Register,
         /// The 8-bit signed immediate value
         imm8: u8,
     },
+    /// Move (Register).
+    ///
+    /// Copies a value from a register to the destination register. Condition
+    /// flags are not updated.
+    ///
     /// `MOV <Rd>,<Rm>`
-    MovRegT1 {
-        /// Which register to move into
+    MovReg {
+        /// The destination register to write to
         rd: Register,
-        /// Which register to move from
+        /// The register to read from.
+        rm: Register,
+    },
+    /// Move and Set (Register).
+    ///
+    /// Copies a value from a register to the destination register. Condition
+    /// flags are updated.
+    ///
+    /// `MOVS <Rd>,<Rm>`
+    MovsReg {
+        /// The destination register to write to
+        rd: Register,
+        /// The register to read from.
         rm: Register,
     },
     // =======================================================================
     // Store Instructions
     // =======================================================================
+    /// Store Register (Immediate).
+    ///
+    /// Calculates an address from a base address register and an immediate
+    /// offset, and stores a value from a register to that address.
+    ///
     /// `STR <Rt>,[<Rn>{,#<imm5>}]`
     StrImm {
-        /// Which register contains the value to store
+        /// The register that contains the value to store
         rt: Register,
-        /// Which register contains the base address to store at
+        /// The register that contains the base address to store at
         rn: Register,
         /// What offset to apply to the base address
-        imm32: u32,
+        imm5x4: u8,
     },
+    /// Store Register Byte (Immediate).
+    ///
+    /// Calculates an address from a base address register and an immediate
+    /// offset, and stores a byte from a register to that address.
+    ///
     /// `STRB <Rt>,[<Rn>{,#<imm5>}]`
     StrbImm {
-        /// Which register contains the value to store
+        /// The register that contains the value to store
         rt: Register,
-        /// Which register contains the address to store at
+        /// The register that contains the address to store at
         rn: Register,
         /// What offset to apply to the storage address
         imm5: u8,
     },
+    /// Store Register Byte (Register)
+    ///
+    /// Calculates an address from a base address register and a value in an
+    /// offset register, and stores a byte from a register to that address.
+    ///
     /// `STRB <Rt>,[<Rn>,<Rm>]`
     StrbReg {
-        /// Which register contains the value to store
+        /// The register that contains the value to store
         rt: Register,
-        /// Which register contains the address to store at
+        /// The register that contains the address to store at
         rn: Register,
-        /// Which register contains the offset to apply
+        /// The register that contains the offset to apply
         rm: Register,
     },
     // =======================================================================
     // Load Instructions
     // =======================================================================
+    /// Load Register (literal)
+    ///
+    /// Calculates a PC-relative address using an immediate offset, and loads
+    /// a word from memory into a register.
+    ///
     /// `LDR <Rt>,[PC,#<imm8>]`
     LdrLiteral {
-        /// Which register to load into
+        /// The register to load into
         rt: Register,
-        /// Offset to add to PC
-        imm32: u32,
+        /// Offset to add to PC. Must be a multiple of 4 in the range `0..=1020`.
+        imm8x4: u16,
     },
+    /// Load Register (Immediate).
+    ///
+    /// Calculates an address using a base register and an immediate offset, and
+    /// loads a word from memory into a register.
+    ///
     /// `LDR <Rt>,[<Rn>{,#<imm5>}]`
     LdrImm {
-        /// Which register to load into
+        /// The register to load into
         rt: Register,
-        /// Which register contains the base address to read from
+        /// The register that contains the base address to read from
         rn: Register,
         /// What offset to apply to the base address
-        imm32: u32,
+        imm5x4: u8,
     },
+    /// Load Register Byte (Immediate).
+    ///
+    /// Calculates an address using a base register and an immediate offset, and
+    /// loads a byte from memory into a register.
+    ///
     /// `LDRB <Rt>,[<Rn>{,#<imm5>}]`
     LdrbImm {
-        /// Which register to load into
+        /// The register to load into
         rt: Register,
-        /// Which register contains the base address to read from
+        /// The register that contains the base address to read from
         rn: Register,
         /// What offset to apply to the base address
         imm5: u8,
@@ -343,6 +420,10 @@ pub enum Instruction {
     // =======================================================================
     // Stack Instructions
     // =======================================================================`
+    /// Push Multiple Registers.
+    ///
+    /// Pushes multiple registers to the stack.
+    ///
     /// `PUSH {<register list>}`
     Push {
         /// A bitmask of registers (R7 to R0) to push
@@ -350,6 +431,10 @@ pub enum Instruction {
         /// Also push LR
         m: bool,
     },
+    /// Pop Multiple Registers
+    ///
+    /// Pops multiple registers from the stack.
+    ///
     /// `POP {<register list>}`
     Pop {
         /// A bitmask of registers (R7 to R0) to pop
@@ -357,6 +442,12 @@ pub enum Instruction {
         /// Also pop LR
         p: bool,
     },
+    /// Load Multiple, Increment After.
+    ///
+    /// Loads multiple registers from consecutive memory locations using an
+    /// address from a base address register. The base address register is
+    /// updated, if it is not part of the register list being written to.
+    ///
     /// `LDMIA <Rn>!,{<register list>}`
     Ldmia {
         /// Base address to load from
@@ -364,6 +455,13 @@ pub enum Instruction {
         /// Register list
         register_list: RegisterList,
     },
+    /// Store Multiple, Increment After.
+    ///
+    /// Stores multiple registers to consecutive memory locations using an
+    /// address from a base register. The base address register is
+    /// updated, if it is not part of the register list being written to.
+    ///
+    ///
     /// `STMIA <Rn>!,{<register list>}`
     Stmia {
         /// Base address to save to
@@ -371,199 +469,347 @@ pub enum Instruction {
         /// Register list
         register_list: RegisterList,
     },
+    /// Add, Stack Pointer plus Immediate, to Register.
+    ///
+    /// Adds an immediate value to the value in the Stack Pointer and writes the
+    /// result to the destination register.
+    ///
     /// `ADD <Rd>,SP,#<imm8>`
-    AddSpT1 {
-        /// Which register to store the result in
+    AddSpImmReg {
+        /// The destination register
         rd: Register,
-        /// The increment for the stack pointer
-        imm32: u32,
+        /// How much to add to the stack pointer. Must be a multiple of 4 in
+        /// the range `0..=1020`.
+        imm8x4: u16,
     },
-    /// `ADD SP,#<imm11>`
+    /// Add, Stack Pointer plus Immediate.
+    ///
+    /// Increments the Stack Pointer by an immediate value.
+    ///
+    /// `ADD SP,SP,#<imm7>`
     AddSpImm {
-        /// How much to add to the stack pointer
-        imm32: u32,
+        /// How much to add to the stack pointer. Must be a multiple of 4 in
+        /// the range `0..=508`.
+        imm7x4: u32,
     },
-    /// `SUB SP,#<imm7>`
+    /// Subtract, Stack Pointer minus Immediate.
+    ///
+    /// Decrements the Stack Pointer by an immediate value.
+    ///
+    /// `SUB SP,SP,#<imm7>`
     SubSpImm {
-        /// How much to subtract from the stack pointer
-        imm32: u32,
+        /// How much to subtract from the stack pointer. Must be a multiple of 4
+        /// in the range `0..=508`.
+        imm7x4: u32,
     },
+    /// Load Register, Stack Pointer plus Immediate.
+    ///
+    /// Calculates an address from the Stack Pointer value plus an immediate
+    /// value, and loads a word from memory at that address into a register.
+    ///
     /// `LDR <Rt>,[SP,#<imm8>]`
     LdrSpImm {
-        /// Which register to store the loaded value in
+        /// The register to store the loaded value in
         rt: Register,
-        /// The offset to apply to the stack pointer
-        imm32: u32,
+        /// The offset to apply to the Stack Pointer value. Must be a multiple
+        /// of 4 in the range `0..=1020`.
+        imm8x4: u16,
     },
+    /// Store Register, Stack Pointer plus Immediate.
+    ///
+    /// Calculates an address from the Stack Pointer value plus an immediate
+    /// value, and stores a word from a register to memory at that address.
+    ///
     /// `STR <Rt>,[SP,#<imm8>]`
     StrSpImm {
-        /// Which register to contains the value to store
+        /// The register to contains the value to store
         rt: Register,
-        /// The offset to apply to the stack pointer
-        imm32: u32,
+        /// The offset to apply to the stack pointer. Must be a multiple of 4 in
+        /// the range `0..=1020`.
+        imm8x4: u16,
     },
     // =======================================================================
     // Arithmetic Instructions
     // =======================================================================
+    /// Add and Set (Immediate)
+    ///
+    /// Add an immediate value to a register value and write the result to a
+    /// destination register. Condition flags are updated.
+    ///
     /// `ADDS <Rd>,<Rn>,#<imm3>`
-    AddsImm {
-        /// Which register to store the result in
+    AddsImm3 {
+        /// The destination register
         rd: Register,
-        /// Which register to get the value from
+        /// The register that contains the first operand.
         rn: Register,
-        /// How much to add to <Rn>
+        /// The second operand
         imm3: u8,
     },
-    /// `ADDS <Rd>,<Rn>,<Rm>`
-    AddsReg {
-        /// Which register to store the result in
-        rd: Register,
-        /// Which register to get the first value from
-        rn: Register,
-        /// Which register to get the second value from
-        rm: Register,
-    },
-    /// `ADCS <Rdn>,<Rm>`
-    AdcsReg {
-        /// Which register to add to
+    /// Add and Set (Immediate, same register)
+    ///
+    /// Add an immediate value to a register value and write the result back to
+    /// the same register. One less register to specify means more bits for the
+    /// immediate value. Condition flags are updated.
+    ///
+    /// `ADDS <Rdn>,#<imm8>`
+    AddsImm8 {
+        /// The register that contains the first operand, and the destination
         rdn: Register,
-        /// Which register to get the value from
-        rm: Register,
-    },
-    /// `SUBS <Rd>,<Rn>,#<imm3>`
-    SubsImm3 {
-        /// Which register to store the result in
-        rd: Register,
-        /// Which register to get the value from
-        rn: Register,
-        /// How much to subtract from <Rn>
-        imm3: u8,
-    },
-    /// `SUBS <Rdn>,#<imm8>`
-    SubsImm8 {
-        /// Which register to get/store the result
-        rdn: Register,
-        /// How much to subtract from <Rdn>
+        /// How much to add to <Rdn>
         imm8: u8,
     },
+    /// Add and Set (Register).
+    ///
+    /// Adds two register values together and write the result to a third
+    /// register. Condition flags are updated.
+    ///
+    /// `ADDS <Rd>,<Rn>,<Rm>`
+    AddsReg {
+        /// The destination register
+        rd: Register,
+        /// The register that contains the first operand.
+        rn: Register,
+        /// The register that contains the second operand
+        rm: Register,
+    },
+    /// Add with Carry, and Set (Register)
+    ///
+    /// Adds a register value, and the carry bit, to a register. Condition flags
+    /// are updated.
+    ///
+    /// `ADCS <Rdn>,<Rm>`
+    AdcsReg {
+        /// The register that contains the first operand, and the destination
+        rdn: Register,
+        /// The register that contains the second operand
+        rm: Register,
+    },
+    /// Subtract and Set (Immediate)
+    ///
+    /// Subtract an immediate value from a register value and write the result to a
+    /// destination register. Condition flags are updated.
+    ///
+    /// `SUBS <Rd>,<Rn>,#<imm3>`
+    SubsImm3 {
+        /// The destination register
+        rd: Register,
+        /// The register that contains the first operand.
+        rn: Register,
+        /// The immediate value for the second operand.
+        imm3: u8,
+    },
+    /// Subtract and Set (Immediate, same register)
+    ///
+    /// Subtract an immediate value from a register value and write the result
+    /// back to the same register. One less register to specify means more bits
+    /// for the immediate value. Condition flags are updated.
+    ///
+    /// `SUBS <Rdn>,#<imm8>`
+    SubsImm8 {
+        /// The register that contains the first operand, and the destination
+        rdn: Register,
+        /// The immediate value for the second operand.
+        imm8: u8,
+    },
+    /// Subtract and Set (Register).
+    ///
+    /// Subtract one register value from another, and write the result to a
+    /// third register. Condition flags are updated.
+    ///
     /// `SUBS <Rd>,<Rn>,<Rm>`
     SubsReg {
-        /// Which register to store the result in
+        /// The destination register
         rd: Register,
-        /// Which register to get the first value from
+        /// The register that contains the first operand.
         rn: Register,
-        /// Which register to get the second value from
+        /// The register that contains the second operand
         rm: Register,
     },
+    /// Reverse Subtract (Immediate).
+    ///
+    /// Subtracts a register value from an immediate value and writes the result
+    /// to a register.
+    ///
+    /// The immediate value can only be zero on ARMv6-M, so this ends up causing
+    /// the value in the register to be negatated.
+    ///
     /// `RSBS <Rd>,<Rn>,#0`
     RsbImm {
-        /// Which register to store the result in
+        /// The destination register
         rd: Register,
-        /// Which register to get the value from
+        /// The register that contains the value to be negated.
         rn: Register,
     },
+    /// Logical Shift Left with Set (Immediate).
+    ///
+    /// Shift register left by a number of bits given in an immediate
+    /// value, shifting in zeros. Condition flags are updated.
+    ///
     /// `LSLS <Rd>,<Rm>,#<imm>`
     LslsImm {
-        /// Which register to store the result in
+        /// The destination register
         rd: Register,
-        /// Which register to get the value from
+        /// The register that contains the first operand.
         rm: Register,
-        /// How many bits to shift
+        /// The second operand
         imm5: u8,
     },
+    /// Logical Shift Left with Set (Register).
+    ///
+    /// Shift register left by a number of bits given in another register,
+    /// shifting in zeros. Condition flags are updated.
+    ///
     /// `LSLS <Rdn>,<Rm>
     LslsReg {
-        /// Which register to shift
+        /// The register that contains the first operand, and the destination
         rdn: Register,
-        /// How many bits to shift (read from bottom byte)
+        /// The register that contains the second operand
         rm: Register,
     },
+    /// Logical Shift Right with Set (Immediate).
+    ///
+    /// Shift register right by a number of bits given in an immediate
+    /// value, shifting in zeros. Condition flags are updated.
+    ///
     /// `LSRS <Rx>,<Rx>,#<imm>`
     LsrsImm {
-        /// Which register to store the result in
+        /// The destination register
         rd: Register,
-        /// Which register to get the value from
+        /// The register that contains the first operand.
         rm: Register,
-        /// How many bits to shift
+        /// The second operand
         imm5: u8,
     },
+    /// Logical Shift Right with Set (Register).
+    ///
+    /// Shift register right by a number of bits given in another register,
+    /// shifting in zeros. Condition flags are updated.
+    ///
     /// `LSRS <Rdn>,<Rm>
     LsrsReg {
-        /// Which register to shift
+        /// The register that contains the first operand, and the destination
         rdn: Register,
-        /// How many bits to shift (read from bottom byte)
+        /// The register that contains the second operand
         rm: Register,
     },
+    /// Unsigned Extend Byte.
+    ///
+    /// Read 8 bits from one register, zero-extend to 32-bits, and write to the
+    /// destination register.
+    ///
     /// `UXTB <Rd>,<Rm>`
     Uxtb {
-        /// Which register to store the 32-bit result in
+        /// The destination register
         rd: Register,
-        /// Which register to read the 8-bit value from
+        /// The register to read the 8-bit value from
         rm: Register,
     },
     // =======================================================================
     // Logical Instructions
     // =======================================================================
+    /// Compare (Register)
+    ///
+    /// Subtracts one register value from another, and updates the condition
+    /// flags but discard the numeric result.
+    ///
     /// `CMP <Rn>,<Rm>`
     CmpReg {
-        /// The left hand register to compare
+        /// The register that contains the first operand.
         rn: Register,
-        /// The right hand register to compare
+        /// The register that contains the second operand
         rm: Register,
     },
-    /// `CMP <Rn>,#<imm>`
+    /// Compare (Immediate)
+    ///
+    /// Subtracts an immediate value from a register value, and updates the
+    /// condition flags but discard the numeric result.
+    ///
+    /// `CMP <Rn>,#<imm8>`
     CmpImm {
-        /// The left hand register to compare
+        /// The register that contains the first operand.
         rn: Register,
         /// The right hand immediate value to compare
-        imm32: u32,
+        imm8: u8,
     },
+    /// Bitwise AND, and Set (Register)
+    ///
+    /// Computes the bitwise AND of two register values. Condition flags are
+    /// updated.
+    ///
     /// `ANDS <Rdn>,<Rm>`
     AndsReg {
-        /// The left hand register for the operation, and destination
+        /// The register that contains the first operand, and the destination
         rdn: Register,
-        /// The right hand register for the operation
+        /// The register that contains the second operand
         rm: Register,
     },
+    /// Bitwise OR, and Set (Register)
+    ///
+    /// Computes the bitwise OR of two register values. Condition flags are
+    /// updated.
+    ///
     /// `ORRS <Rdn>,<Rm>`
     OrrsReg {
-        /// The left hand register for the operation, and destination
+        /// The register that contains the first operand, and the destination
         rdn: Register,
-        /// The right hand register for the operation
+        /// The register that contains the second operand
         rm: Register,
     },
+    /// Bit Clear, and Set (Register)
+    ///
+    /// Computes the bitwise AND of a register value, and the complement of a
+    /// register value. This effectively clears any bits in the first value that
+    /// are set in the second. Condition flags are updated.
+    ///
     /// `BICS <Rdn>,<Rm>`
     BicsReg {
-        /// The left hand register for the operation, and destination
+        /// The register that contains the first operand, and the destination
         rdn: Register,
-        /// The right hand register for the operation
+        /// The register that contains the second operand
         rm: Register,
     },
     // =======================================================================
     // Other Instructions
     // =======================================================================
+    /// Breakpoint.
+    ///
+    /// Cause a HardFault, or a debug halt, depending on the presence of debug
+    /// support.
+    ///
     /// `BKPT <imm8>`
     Breakpoint {
         /// The 8-bit signed immediate value
         imm8: u8,
     },
+    /// Move to Register from Special.
+    ///
+    /// Move a value from a Special Register to a Register.
+    ///
     /// `MRS <Rd>,<spec_reg>`
     Mrs {
-        /// Which register to read from
+        /// The destination register
         rd: Register,
         /// Which special register to write to
         sys_m: u8,
     },
+    /// Move to Special from Register.
+    ///
+    /// Move a value from a egister to a Special Register.
+    ///
     /// `MSR <Rn>,<spec_reg>`
     Msr {
-        /// Which register to write to
+        /// The register to write to
         rn: Register,
         /// Which special register to read from
         sys_m: u8,
     },
+    /// Change Processor State.
+    ///
+    /// Mask (disable) or Unmask (enable) Interrupts.
+    ///
     /// `CPSID i` or `CPSIE i`
     Cps {
-        /// `true` to disable interrupts, `false` to enable
+        /// `true` to mask (disable) interrupts, `false` to unmask (enable)
         im: bool,
     },
 }
@@ -578,14 +824,15 @@ impl std::fmt::Display for Instruction {
             Instruction::BranchLink { imm32 } => write!(f, "BL {:+#}", *imm32 + 4),
             Instruction::BranchExchange { rm } => write!(f, "BX {}", *rm),
             Instruction::BranchLinkExchange { rm } => write!(f, "BLX {}", *rm),
-            Instruction::MovImm { rd, imm8 } => write!(f, "MOV {},#{}", rd, imm8),
-            Instruction::MovRegT1 { rd, rm } => write!(f, "MOV {},{}", rd, rm),
-            Instruction::StrImm { rt, rn, imm32 } => write!(f, "STR {},[{},#{}]", rt, rn, imm32),
-            Instruction::StrbImm { rt, rn, imm5 } => write!(f, "STRB {},[{},#{}]", rt, rn, imm5),
-            Instruction::StrbReg { rt, rn, rm } => write!(f, "STRB {},[{},{}]", rt, rn, rm),
-            Instruction::LdrLiteral { rt, imm32 } => write!(f, "LDR {},[PC,#{}]", rt, imm32),
-            Instruction::LdrImm { rt, rn, imm32 } => write!(f, "LDR {},[{},#{}]", rt, rn, imm32),
-            Instruction::LdrbImm { rt, rn, imm5 } => write!(f, "LDRB {},[{},#{}]", rt, rn, imm5),
+            Instruction::MovsImm { rd, imm8 } => write!(f, "MOVS {rd},#{imm8}"),
+            Instruction::MovReg { rd, rm } => write!(f, "MOV {rd},{rm}"),
+            Instruction::MovsReg { rd, rm } => write!(f, "MOVS {rd},{rm}"),
+            Instruction::StrImm { rt, rn, imm5x4 } => write!(f, "STR {rt},[{rn},#{imm5x4}]"),
+            Instruction::StrbImm { rt, rn, imm5 } => write!(f, "STRB {rt},[{rn},#{imm5}]"),
+            Instruction::StrbReg { rt, rn, rm } => write!(f, "STRB {rt},[{rn},{rm}]"),
+            Instruction::LdrLiteral { rt, imm8x4 } => write!(f, "LDR {rt},[PC,#{imm8x4}]"),
+            Instruction::LdrImm { rt, rn, imm5x4 } => write!(f, "LDR {rt},[{rn},#{imm5x4}]"),
+            Instruction::LdrbImm { rt, rn, imm5 } => write!(f, "LDRB {rt},[{rn},#{imm5}]"),
             Instruction::Push { register_list, m } => {
                 write!(f, "PUSH {{{}", register_list)?;
                 if *m {
@@ -612,31 +859,32 @@ impl std::fmt::Display for Instruction {
             Instruction::Stmia { rn, register_list } => {
                 write!(f, "STMIA {}!,{{{}}}", rn, register_list)
             }
-            Instruction::AddSpT1 { rd, imm32 } => write!(f, "ADD {},SP,#{}", rd, imm32),
-            Instruction::AddSpImm { imm32 } => write!(f, "ADD SP,#{}", imm32),
-            Instruction::SubSpImm { imm32 } => write!(f, "SUB SP,#{}", imm32),
-            Instruction::LdrSpImm { rt, imm32 } => write!(f, "LDR {},[SP,#{}]", rt, imm32),
-            Instruction::StrSpImm { rt, imm32 } => write!(f, "STR {},[SP,#{}]", rt, imm32),
-            Instruction::AddsImm { rd, rn, imm3 } => write!(f, "ADDS {},{},#{}", rd, rn, imm3),
-            Instruction::AddsReg { rd, rn, rm } => write!(f, "ADDS {},{},{}", rd, rn, rm),
-            Instruction::AdcsReg { rdn, rm } => write!(f, "ADCS {},{}", rdn, rm),
-            Instruction::SubsImm3 { rd, rn, imm3 } => write!(f, "SUBS {},{},#{}", rd, rn, imm3),
-            Instruction::SubsImm8 { rdn, imm8 } => write!(f, "SUBS {},#{}", rdn, imm8),
-            Instruction::SubsReg { rd, rn, rm } => write!(f, "SUBS {},{},{}", rd, rn, rm),
-            Instruction::RsbImm { rd, rn } => write!(f, "RSBS {},{},#0", rd, rn),
-            Instruction::LslsImm { rd, rm, imm5 } => write!(f, "LSLS {},{},#{}", rd, rm, imm5),
-            Instruction::LslsReg { rdn, rm } => write!(f, "LSLS {},{}", rdn, rm),
-            Instruction::LsrsImm { rd, rm, imm5 } => write!(f, "LSRS {},{},#{}", rd, rm, imm5),
-            Instruction::LsrsReg { rdn, rm } => write!(f, "LSRS {},{}", rdn, rm),
-            Instruction::Uxtb { rd, rm } => write!(f, "UXTB {},{}", rd, rm),
-            Instruction::CmpReg { rn, rm } => write!(f, "CMP {},{}", rn, rm),
-            Instruction::CmpImm { rn, imm32 } => write!(f, "CMP {},#{}", rn, imm32),
-            Instruction::AndsReg { rdn, rm } => write!(f, "ANDS {},{}", rdn, rm),
-            Instruction::OrrsReg { rdn, rm } => write!(f, "ORRS {},{}", rdn, rm),
-            Instruction::BicsReg { rdn, rm } => write!(f, "BICS {},{}", rdn, rm),
-            Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{:02x}", imm8),
-            Instruction::Mrs { rd, sys_m } => write!(f, "MRS {},{}", rd, sys_m),
-            Instruction::Msr { rn, sys_m } => write!(f, "MSR {},{}", rn, sys_m),
+            Instruction::AddSpImmReg { rd, imm8x4 } => write!(f, "ADD {rd},SP,#{imm8x4}"),
+            Instruction::AddSpImm { imm7x4 } => write!(f, "ADD SP,#{imm7x4}",),
+            Instruction::SubSpImm { imm7x4 } => write!(f, "SUB SP,#{imm7x4}",),
+            Instruction::LdrSpImm { rt, imm8x4 } => write!(f, "LDR {rt},[SP,#{imm8x4}]"),
+            Instruction::StrSpImm { rt, imm8x4 } => write!(f, "STR {rt},[SP,#{imm8x4}]"),
+            Instruction::AddsImm3 { rd, rn, imm3 } => write!(f, "ADDS {rd},{rn},#{imm3}"),
+            Instruction::AddsImm8 { rdn, imm8 } => write!(f, "ADDS {rdn},#{imm8}"),
+            Instruction::AddsReg { rd, rn, rm } => write!(f, "ADDS {rd},{rn},{rm}"),
+            Instruction::AdcsReg { rdn, rm } => write!(f, "ADCS {rdn},{rm}"),
+            Instruction::SubsImm3 { rd, rn, imm3 } => write!(f, "SUBS {rd},{rn},#{imm3}"),
+            Instruction::SubsImm8 { rdn, imm8 } => write!(f, "SUBS {rdn},#{imm8}"),
+            Instruction::SubsReg { rd, rn, rm } => write!(f, "SUBS {rd},{rn},{rm}"),
+            Instruction::RsbImm { rd, rn } => write!(f, "RSBS {rd},{rn},#0"),
+            Instruction::LslsImm { rd, rm, imm5 } => write!(f, "LSLS {rd},{rm},#{imm5}"),
+            Instruction::LslsReg { rdn, rm } => write!(f, "LSLS {rdn},{rm}"),
+            Instruction::LsrsImm { rd, rm, imm5 } => write!(f, "LSRS {rd},{rm},#{imm5}"),
+            Instruction::LsrsReg { rdn, rm } => write!(f, "LSRS {rdn},{rm}"),
+            Instruction::Uxtb { rd, rm } => write!(f, "UXTB {rd},{rm}"),
+            Instruction::CmpReg { rn, rm } => write!(f, "CMP {rn},{rm}"),
+            Instruction::CmpImm { rn, imm8 } => write!(f, "CMP {rn},#{imm8}"),
+            Instruction::AndsReg { rdn, rm } => write!(f, "ANDS {rdn},{rm}"),
+            Instruction::OrrsReg { rdn, rm } => write!(f, "ORRS {rdn},{rm}"),
+            Instruction::BicsReg { rdn, rm } => write!(f, "BICS {rdn},{rm}"),
+            Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{imm8:02x}",),
+            Instruction::Mrs { rd, sys_m } => write!(f, "MRS {rd},{sys_m}"),
+            Instruction::Msr { rn, sys_m } => write!(f, "MSR {rn},{sys_m}"),
             Instruction::Cps { im } => write!(f, "CPSI{} i", if *im { "D" } else { "E" }),
         }
     }
@@ -881,19 +1129,19 @@ impl Armv6M {
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::StrSpImm {
                 rt: Register::from(rt),
-                imm32: u32::from(imm8) << 2,
+                imm8x4: u16::from(imm8) << 2,
             })
         } else if (word >> 11) == 0b10011 {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::LdrSpImm {
                 rt: Register::from(rt),
-                imm32: u32::from(imm8) << 2,
+                imm8x4: u16::from(imm8) << 2,
             })
         } else if (word >> 11) == 0b00100 {
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
-            Ok(Instruction::MovImm {
+            Ok(Instruction::MovsImm {
                 rd: Register::from(rd),
                 imm8,
             })
@@ -904,9 +1152,9 @@ impl Armv6M {
         } else if (word >> 11) == 0b10101 {
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
-            Ok(Instruction::AddSpT1 {
+            Ok(Instruction::AddSpImmReg {
                 rd: Register::from(rd),
-                imm32: u32::from(imm8) << 2,
+                imm8x4: u16::from(imm8) << 2,
             })
         } else if (word >> 11) == 0b00111 {
             let imm8 = (word & 0xFF) as u8;
@@ -920,7 +1168,7 @@ impl Armv6M {
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::LdrLiteral {
                 rt: Register::from(rt),
-                imm32: u32::from(imm8) << 2,
+                imm8x4: u16::from(imm8) << 2,
             })
         } else if (word >> 11) == 0b01110 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
@@ -947,7 +1195,7 @@ impl Armv6M {
             Ok(Instruction::StrImm {
                 rt: Register::from(rt),
                 rn: Register::from(rn),
-                imm32: u32::from(imm5) << 2,
+                imm5x4: imm5 << 2,
             })
         } else if (word >> 11) == 0b01101 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
@@ -956,9 +1204,11 @@ impl Armv6M {
             Ok(Instruction::LdrImm {
                 rt: Register::from(rt),
                 rn: Register::from(rn),
-                imm32: u32::from(imm5) << 2,
+                imm5x4: imm5 << 2,
             })
-        } else if (word >> 11) == 0b00000 {
+        } else if (word >> 11) == 0b00000 && (word >> 6) != 0 {
+            // Note: don't mix up LSL Rd,Rm,#0 with the otherwise identical MOVS
+            // Rd,Rm
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -984,7 +1234,14 @@ impl Armv6M {
             let rn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::CmpImm {
                 rn: Register::from(rn),
-                imm32: u32::from(imm8),
+                imm8,
+            })
+        } else if (word >> 11) == 0b00110 {
+            let imm8 = (word & 0xFF) as u8;
+            let rdn = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::AddsImm8 {
+                rdn: Register::from(rdn),
+                imm8,
             })
         } else if (word >> 11) == 0b11000 {
             let register_list = (word & 0xFF) as u8;
@@ -1018,7 +1275,7 @@ impl Armv6M {
             let imm3 = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
-            Ok(Instruction::AddsImm {
+            Ok(Instruction::AddsImm3 {
                 rd: Register::from(rd),
                 rn: Register::from(rn),
                 imm3,
@@ -1066,7 +1323,7 @@ impl Armv6M {
             let d: u8 = ((word >> 7) & 0b1) as u8;
             let rd = (d << 3) | (word & 0b111) as u8;
             let rm: u8 = ((word >> 3) & 0b1111) as u8;
-            Ok(Instruction::MovRegT1 {
+            Ok(Instruction::MovReg {
                 rm: Register::from(rm),
                 rd: Register::from(rd),
             })
@@ -1083,12 +1340,12 @@ impl Armv6M {
         } else if (word >> 7) == 0b101100000 {
             let imm7 = (word & 0x7F) as u8;
             Ok(Instruction::AddSpImm {
-                imm32: u32::from(imm7) << 2,
+                imm7x4: u32::from(imm7) << 2,
             })
         } else if (word >> 7) == 0b101100001 {
             let imm7 = (word & 0x7F) as u8;
             Ok(Instruction::SubSpImm {
-                imm32: u32::from(imm7) << 2,
+                imm7x4: u32::from(imm7) << 2,
             })
         } else if (word >> 6) == 0b0100000010 {
             let rm = ((word >> 3) & 0b111) as u8;
@@ -1151,6 +1408,13 @@ impl Armv6M {
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::AdcsReg {
                 rdn: Register::from(rdn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 6) == 0b0000000000 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::MovsReg {
+                rd: Register::from(rd),
                 rm: Register::from(rm),
             })
         } else if (word >> 5) == 0b10110110011 {
@@ -1249,7 +1513,7 @@ impl Armv6M {
             // =======================================================================
             // Move Instructions
             // =======================================================================
-            Instruction::MovImm { rd, imm8 } => {
+            Instruction::MovsImm { rd, imm8 } => {
                 let imm32 = u32::from(imm8);
                 self.store_reg(rd, imm32);
                 self.set_z(imm32 == 0);
@@ -1257,7 +1521,7 @@ impl Armv6M {
                 // c is unchanged
                 // v is unchanged
             }
-            Instruction::MovRegT1 { rm, rd } => {
+            Instruction::MovReg { rm, rd } => {
                 let value = self.fetch_reg(rm);
                 if rd == Register::Pc {
                     self.store_reg(rd, value * 2);
@@ -1265,19 +1529,26 @@ impl Armv6M {
                     self.store_reg(rd, value);
                 }
             }
+            Instruction::MovsReg { rd, rm } => {
+                let value = self.fetch_reg(rm);
+                self.store_reg(rd, value);
+                self.set_z(value == 0);
+                self.set_n(value >= 0x80000000);
+                // c is unchanged
+                // v is unchanged
+            }
             // =======================================================================
             // Store Instructions
             // =======================================================================
-            Instruction::StrImm { rt, rn, imm32 } => {
+            Instruction::StrImm { rt, rn, imm5x4 } => {
                 let addr = self.fetch_reg(rn);
-                let offset_addr = addr.wrapping_add(imm32);
+                let offset_addr = addr.wrapping_add(u32::from(imm5x4));
                 let value = self.fetch_reg(rt);
                 memory.store_u32(offset_addr, value)?;
             }
             Instruction::StrbImm { rt, rn, imm5 } => {
-                let imm32 = u32::from(imm5);
                 let addr = self.fetch_reg(rn);
-                let offset_addr = addr.wrapping_add(imm32);
+                let offset_addr = addr.wrapping_add(u32::from(imm5));
                 let value = self.fetch_reg(rt);
                 memory.store_u8(offset_addr, (value & 0xFF) as u8)?;
             }
@@ -1291,17 +1562,17 @@ impl Armv6M {
             // =======================================================================
             // Load Instructions
             // =======================================================================
-            Instruction::LdrLiteral { rt, imm32 } => {
+            Instruction::LdrLiteral { rt, imm8x4 } => {
                 // Assume's PC next increment has happened already
                 // Also align to 4 bytes
                 let base = (self.pc.wrapping_add(2)) & !0b11;
-                let addr = base.wrapping_add(imm32);
+                let addr = base.wrapping_add(u32::from(imm8x4));
                 let value = memory.load_u32(addr)?;
                 self.store_reg(rt, value);
             }
-            Instruction::LdrImm { rt, rn, imm32 } => {
+            Instruction::LdrImm { rt, rn, imm5x4 } => {
                 let addr = self.fetch_reg(rn);
-                let offset_addr = addr.wrapping_add(imm32);
+                let offset_addr = addr.wrapping_add(u32::from(imm5x4));
                 let value = memory.load_u32(offset_addr)?;
                 self.store_reg(rt, value);
             }
@@ -1363,33 +1634,33 @@ impl Armv6M {
                     self.store_reg(rn, base);
                 }
             }
-            Instruction::AddSpT1 { rd, imm32 } => {
+            Instruction::AddSpImmReg { rd, imm8x4 } => {
                 let sp = self.sp;
-                let value = sp.wrapping_add(imm32);
+                let value = sp.wrapping_add(u32::from(imm8x4));
                 self.store_reg(rd, value);
             }
-            Instruction::AddSpImm { imm32 } => {
-                self.sp = self.sp.wrapping_add(imm32);
+            Instruction::AddSpImm { imm7x4 } => {
+                self.sp = self.sp.wrapping_add(imm7x4);
             }
-            Instruction::SubSpImm { imm32 } => {
+            Instruction::SubSpImm { imm7x4 } => {
                 // This does a subtraction
-                let value = self.sp.wrapping_add(!imm32).wrapping_add(1);
+                let value = self.sp.wrapping_add(!imm7x4).wrapping_add(1);
                 self.sp = value;
             }
-            Instruction::LdrSpImm { rt, imm32 } => {
-                let offset_addr = self.sp.wrapping_add(imm32);
+            Instruction::LdrSpImm { rt, imm8x4 } => {
+                let offset_addr = self.sp.wrapping_add(u32::from(imm8x4));
                 let value = memory.load_u32(offset_addr)?;
                 self.store_reg(rt, value);
             }
-            Instruction::StrSpImm { rt, imm32 } => {
-                let offset_addr = self.sp.wrapping_add(imm32);
+            Instruction::StrSpImm { rt, imm8x4 } => {
+                let offset_addr = self.sp.wrapping_add(u32::from(imm8x4));
                 let value = self.fetch_reg(rt);
                 memory.store_u32(offset_addr, value)?;
             }
             // =======================================================================
             // Arithmetic Instructions
             // =======================================================================
-            Instruction::AddsImm { rd, rn, imm3 } => {
+            Instruction::AddsImm3 { rd, rn, imm3 } => {
                 let value1 = self.fetch_reg(rn);
                 let value2 = u32::from(imm3);
                 let (result, carry_out, overflow) = Self::add_with_carry(value1, value2, false);
@@ -1398,6 +1669,16 @@ impl Armv6M {
                 self.set_c(carry_out);
                 self.set_v(overflow);
                 self.store_reg(rd, result);
+            }
+            Instruction::AddsImm8 { rdn, imm8 } => {
+                let value1 = self.fetch_reg(rdn);
+                let value2 = u32::from(imm8);
+                let (result, carry_out, overflow) = Self::add_with_carry(value1, value2, false);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+                self.set_v(overflow);
+                self.store_reg(rdn, result);
             }
             Instruction::AddsReg { rd, rn, rm } => {
                 let value1 = self.fetch_reg(rn);
@@ -1527,9 +1808,10 @@ impl Armv6M {
                 self.set_c(carry);
                 self.set_v(overflow);
             }
-            Instruction::CmpImm { rn, imm32 } => {
+            Instruction::CmpImm { rn, imm8 } => {
                 let value_n = self.fetch_reg(rn);
-                let (result, carry, overflow) = Self::add_with_carry(value_n, !imm32, true);
+                let (result, carry, overflow) =
+                    Self::add_with_carry(value_n, !u32::from(imm8), true);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
                 self.set_c(carry);
@@ -2170,29 +2452,90 @@ mod test {
     // Move Instructions
     // =======================================================================
     #[test]
-    fn mov_imm_instruction() {
+    fn movs_imm_instruction() {
         let i = Armv6M::decode(0x2240);
         assert_eq!(
-            Ok(Instruction::MovImm {
+            Ok(Instruction::MovsImm {
                 rd: Register::R2,
                 imm8: 64
             }),
             i
         );
-        assert_eq!("MOV R2,#64", format!("{}", i.unwrap()));
+        assert_eq!("MOVS R2,#64", format!("{}", i.unwrap()));
     }
-
     #[test]
-    fn mov_regt1_instruction() {
+    fn movs_imm_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[1] = 0x12345678;
+        cpu.execute(
+            Instruction::MovsImm {
+                rd: Register::R2,
+                imm8: 64,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(64, cpu.regs[2]);
+    }
+    #[test]
+    fn mov_reg_instruction() {
         let i = Armv6M::decode(0x46B6);
         assert_eq!(
-            Ok(Instruction::MovRegT1 {
+            Ok(Instruction::MovReg {
                 rd: Register::Lr,
                 rm: Register::R6,
             }),
             i
         );
         assert_eq!("MOV LR,R6", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn mov_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[6] = 0x12345678;
+        cpu.execute(
+            Instruction::MovReg {
+                rd: Register::Lr,
+                rm: Register::R6,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x12345678, cpu.lr);
+    }
+    #[test]
+    fn movs_reg_instruction() {
+        let i = Armv6M::decode(0x0035);
+        assert_eq!(
+            Ok(Instruction::MovsReg {
+                rd: Register::R5,
+                rm: Register::R6,
+            }),
+            i
+        );
+        assert_eq!("MOVS R5,R6", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn movs_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[6] = 0x80000000;
+        cpu.execute(
+            Instruction::MovsReg {
+                rd: Register::R5,
+                rm: Register::R6,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x80000000, cpu.regs[5]);
+        assert!(!cpu.is_z());
+        assert!(cpu.is_n());
     }
     // =======================================================================
     // Store Instructions
@@ -2204,13 +2547,12 @@ mod test {
             Ok(Instruction::StrImm {
                 rt: Register::R4,
                 rn: Register::R5,
-                imm32: 0
+                imm5x4: 0
             }),
             i
         );
         assert_eq!("STR R4,[R5,#0]", format!("{}", i.unwrap()));
     }
-
     #[test]
     fn str_immediate_operation() {
         let sp = 16;
@@ -2222,7 +2564,7 @@ mod test {
             Instruction::StrImm {
                 rt: Register::R1,
                 rn: Register::R0,
-                imm32: 4,
+                imm5x4: 4,
             },
             &mut ram,
         )
@@ -2230,7 +2572,6 @@ mod test {
         // R1 written to address 4 + (1 * 4) = 8
         assert_eq!([0, 0, 0x12345678, 0, 0, 0, 0, 0], ram);
     }
-
     #[test]
     fn strb_immediate_instruction() {
         let i = Armv6M::decode(0x7019);
@@ -2305,7 +2646,7 @@ mod test {
         assert_eq!(
             Ok(Instruction::LdrLiteral {
                 rt: Register::R0,
-                imm32: 4
+                imm8x4: 4
             }),
             i
         );
@@ -2319,7 +2660,7 @@ mod test {
             Ok(Instruction::LdrImm {
                 rt: Register::R4,
                 rn: Register::R5,
-                imm32: 0
+                imm5x4: 0
             }),
             i
         );
@@ -2336,7 +2677,7 @@ mod test {
             Instruction::LdrImm {
                 rt: Register::R1,
                 rn: Register::R0,
-                imm32: 4,
+                imm5x4: 4,
             },
             &mut ram,
         )
@@ -2537,12 +2878,12 @@ mod test {
     }
 
     #[test]
-    fn add_sp_t1_instruction() {
+    fn add_sp_imm_reg_instruction() {
         let i = Armv6M::decode(0xaf00);
         assert_eq!(
-            Ok(Instruction::AddSpT1 {
+            Ok(Instruction::AddSpImmReg {
                 rd: Register::R7,
-                imm32: 0
+                imm8x4: 0
             }),
             i
         );
@@ -2550,14 +2891,14 @@ mod test {
     }
 
     #[test]
-    fn add_sp_t1_operation() {
+    fn add_sp_imm_reg_operation() {
         let sp = 32;
         let mut cpu = Armv6M::new(sp, 0x0);
         let mut ram = [15; 8];
         cpu.execute(
-            Instruction::AddSpT1 {
+            Instruction::AddSpImmReg {
                 rd: Register::R0,
-                imm32: 16,
+                imm8x4: 16,
             },
             &mut ram,
         )
@@ -2568,7 +2909,7 @@ mod test {
     #[test]
     fn add_sp_imm_instruction() {
         let i = Armv6M::decode(0xb010);
-        assert_eq!(Ok(Instruction::AddSpImm { imm32: 64 }), i);
+        assert_eq!(Ok(Instruction::AddSpImm { imm7x4: 64 }), i);
         assert_eq!("ADD SP,#64", format!("{}", i.unwrap()));
     }
 
@@ -2577,7 +2918,7 @@ mod test {
         let sp = 0x100;
         let mut cpu = Armv6M::new(sp, 0);
         let mut ram = [15; 8];
-        cpu.execute(Instruction::AddSpImm { imm32: 64 }, &mut ram)
+        cpu.execute(Instruction::AddSpImm { imm7x4: 64 }, &mut ram)
             .unwrap();
         assert_eq!(0x100 + 64, cpu.sp);
     }
@@ -2585,7 +2926,7 @@ mod test {
     #[test]
     fn sub_sp_imm_instruction() {
         let i = Armv6M::decode(0xb090);
-        assert_eq!(Ok(Instruction::SubSpImm { imm32: 64 }), i);
+        assert_eq!(Ok(Instruction::SubSpImm { imm7x4: 64 }), i);
         assert_eq!("SUB SP,#64", format!("{}", i.unwrap()));
     }
 
@@ -2594,7 +2935,7 @@ mod test {
         let sp = 0x100;
         let mut cpu = Armv6M::new(sp, 0);
         let mut ram = [15; 8];
-        cpu.execute(Instruction::SubSpImm { imm32: 64 }, &mut ram)
+        cpu.execute(Instruction::SubSpImm { imm7x4: 64 }, &mut ram)
             .unwrap();
         assert_eq!(0x100 - 64, cpu.sp);
     }
@@ -2605,7 +2946,7 @@ mod test {
         assert_eq!(
             Ok(Instruction::LdrSpImm {
                 rt: Register::R1,
-                imm32: 8
+                imm8x4: 8
             }),
             i
         );
@@ -2620,7 +2961,7 @@ mod test {
         cpu.execute(
             Instruction::LdrSpImm {
                 rt: Register::R1,
-                imm32: 8,
+                imm8x4: 8,
             },
             &mut ram,
         )
@@ -2634,7 +2975,7 @@ mod test {
         assert_eq!(
             Ok(Instruction::StrSpImm {
                 rt: Register::R5,
-                imm32: 8
+                imm8x4: 8
             }),
             i
         );
@@ -2650,7 +2991,7 @@ mod test {
         cpu.execute(
             Instruction::StrSpImm {
                 rt: Register::R1,
-                imm32: 8,
+                imm8x4: 8,
             },
             &mut ram,
         )
@@ -2661,10 +3002,10 @@ mod test {
     // Arithmetic Instructions
     // =======================================================================
     #[test]
-    fn adds_imm_instruction() {
+    fn adds_imm3_instruction() {
         let i = Armv6M::decode(0x1d00);
         assert_eq!(
-            Ok(Instruction::AddsImm {
+            Ok(Instruction::AddsImm3 {
                 rd: Register::R0,
                 rn: Register::R0,
                 imm3: 4
@@ -2673,16 +3014,15 @@ mod test {
         );
         assert_eq!("ADDS R0,R0,#4", format!("{}", i.unwrap()));
     }
-
     #[test]
-    fn adds_imm_operation() {
+    fn adds_imm3_operation() {
         let sp = 16;
         let mut cpu = Armv6M::new(sp, 0);
         let mut ram = [0; 8];
         cpu.regs[0] = 4;
         cpu.regs[1] = 0x12345678;
         cpu.execute(
-            Instruction::AddsImm {
+            Instruction::AddsImm3 {
                 rd: Register::R0,
                 rn: Register::R1,
                 imm3: 1,
@@ -2691,6 +3031,38 @@ mod test {
         )
         .unwrap();
         assert_eq!(0x12345679, cpu.regs[0]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(!cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+    #[test]
+    fn adds_imm8_instruction() {
+        let i = Armv6M::decode(0x3004);
+        assert_eq!(
+            Ok(Instruction::AddsImm8 {
+                rdn: Register::R0,
+                imm8: 4
+            }),
+            i
+        );
+        assert_eq!("ADDS R0,#4", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn adds_imm8_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[1] = 0x12345678;
+        cpu.execute(
+            Instruction::AddsImm8 {
+                rdn: Register::R1,
+                imm8: 1,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x12345679, cpu.regs[1]);
         assert!(!cpu.is_n());
         assert!(!cpu.is_z());
         assert!(!cpu.is_c());
@@ -3196,7 +3568,7 @@ mod test {
         assert_eq!(
             Ok(Instruction::CmpImm {
                 rn: Register::R0,
-                imm32: 5,
+                imm8: 5,
             }),
             i
         );
@@ -3212,7 +3584,7 @@ mod test {
             Instruction::CmpImm {
                 rn: Register::R0,
                 // Must be zero-extended, not sign-extended
-                imm32: 50,
+                imm8: 50,
             },
             &mut ram,
         )
