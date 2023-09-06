@@ -212,13 +212,9 @@ impl From<u8> for Condition {
 /// TODO:
 /// * asrs
 /// * eors
-/// * ldrh
-/// * ldrsb
 /// * muls
-/// * mvns
 /// * nop
 /// * sbcs
-/// * strh
 /// * sxtb
 /// * tst
 /// * udf
@@ -240,7 +236,7 @@ pub enum Instruction {
         ///
         /// A value of -4 means jump to same location, because PC has been
         /// incremented twice before this is executed.
-        imm32: i32,
+        imm11x2: i32,
     },
     /// Conditional Branch.
     ///
@@ -255,7 +251,7 @@ pub enum Instruction {
         ///
         /// A value of -4 means jump to same location, because PC has been
         /// incremented twice before this is executed.
-        imm32: i32,
+        imm8x2: i32,
     },
     /// Branch with Link (Immediate).
     ///
@@ -268,7 +264,7 @@ pub enum Instruction {
         ///
         /// A value of -4 means jump to same location, because PC has been
         /// incremented twice before this is executed.
-        imm32: i32,
+        imm24: i32,
     },
     /// Branch and Exchange.
     ///
@@ -317,18 +313,6 @@ pub enum Instruction {
         /// The register to read from.
         rm: Register,
     },
-    /// Move and Set (Register).
-    ///
-    /// Copies a value from a register to the destination register. Condition
-    /// flags are updated.
-    ///
-    /// `MOVS <Rd>,<Rm>`
-    MovsReg {
-        /// The destination register to write to
-        rd: Register,
-        /// The register to read from.
-        rm: Register,
-    },
     // =======================================================================
     // Store Instructions
     // =======================================================================
@@ -345,6 +329,48 @@ pub enum Instruction {
         rn: Register,
         /// What offset to apply to the base address
         imm5x4: u8,
+    },
+    /// Store Register (Register)
+    ///
+    /// Calculates an address from a base address register and a value in an
+    /// offset register, and stores a word from a register to that address.
+    ///
+    /// `STR <Rt>,[<Rn>,<Rm>]`
+    StrReg {
+        /// The register that contains the value to store
+        rt: Register,
+        /// The register that contains the address to store at
+        rn: Register,
+        /// The register that contains the offset to apply
+        rm: Register,
+    },
+    /// Store Register Halfword (Immediate).
+    ///
+    /// Calculates an address from a base address register and an immediate
+    /// offset, and stores a halfword from a register to that address.
+    ///
+    /// `STRH <Rt>,[<Rn>{,#<imm5>}]`
+    StrhImm {
+        /// The register that contains the value to store
+        rt: Register,
+        /// The register that contains the address to store at
+        rn: Register,
+        /// What offset to apply to the storage address
+        imm5x2: u8,
+    },
+    /// Store Register Halfword (Register)
+    ///
+    /// Calculates an address from a base address register and a value in an
+    /// offset register, and stores a halfword from a register to that address.
+    ///
+    /// `STRH <Rt>,[<Rn>,<Rm>]`
+    StrhReg {
+        /// The register that contains the value to store
+        rt: Register,
+        /// The register that contains the address to store at
+        rn: Register,
+        /// The register that contains the offset to apply
+        rm: Register,
     },
     /// Store Register Byte (Immediate).
     ///
@@ -403,6 +429,50 @@ pub enum Instruction {
         /// What offset to apply to the base address
         imm5x4: u8,
     },
+    /// Load Register (Register)
+    ///
+    /// Calculate an address from a base register value and an offset register
+    /// value and load a word from memory at that address into a destination
+    /// register.
+    ///
+    /// LDR <Rt>,[<Rn>, <Rm}]
+    LdrReg {
+        /// The register to load into
+        rt: Register,
+        /// The register that contains the base address to read from
+        rn: Register,
+        /// The register that contains the offset to apply
+        rm: Register,
+    },
+    /// Load Register Halfword (Immediate).
+    ///
+    /// Calculates an address using a base register and an immediate offset, and
+    /// loads a halfword from memory into a register.
+    ///
+    /// `LDRH <Rt>,[<Rn>{,#<imm5>}]`
+    LdrhImm {
+        /// The register to load into
+        rt: Register,
+        /// The register that contains the base address to read from
+        rn: Register,
+        /// What offset to apply to the base address
+        imm5x2: u8,
+    },
+    /// Load Register Halfword (Register)
+    ///
+    /// Calculate an address from a base register value and an offset register
+    /// value and load a halfword from memory at that address into a destination
+    /// register.
+    ///
+    /// LDRH <Rt>,[<Rn>, <Rm}]
+    LdrhReg {
+        /// The register to load into
+        rt: Register,
+        /// The register that contains the base address to read from
+        rn: Register,
+        /// The register that contains the offset to apply
+        rm: Register,
+    },
     /// Load Register Byte (Immediate).
     ///
     /// Calculates an address using a base register and an immediate offset, and
@@ -416,6 +486,36 @@ pub enum Instruction {
         rn: Register,
         /// What offset to apply to the base address
         imm5: u8,
+    },
+    /// Load Register Byte (Register)
+    ///
+    /// Calculate an address from a base register value and an offset register
+    /// value and load a byte from memory at that address into a destination
+    /// register.
+    ///
+    /// LDRB <Rt>,[<Rn>, <Rm}]
+    LdrbReg {
+        /// The register to load into
+        rt: Register,
+        /// The register that contains the base address to read from
+        rn: Register,
+        /// The register that contains the offset to apply
+        rm: Register,
+    },
+    /// Load Register Signed Byte (Register)
+    ///
+    /// Calculate an address from a base register value and an offset register
+    /// value and load a signed byte from memory at that address into a
+    /// destination register.
+    ///
+    /// LDRSB <Rt>,[<Rn>, <Rm}]
+    LdrsbReg {
+        /// The register to load into
+        rt: Register,
+        /// The register that contains the base address to read from
+        rn: Register,
+        /// The register that contains the offset to apply
+        rm: Register,
     },
     // =======================================================================
     // Stack Instructions
@@ -584,6 +684,19 @@ pub enum Instruction {
         /// The register that contains the second operand
         rm: Register,
     },
+    /// Address to Register
+    ///
+    /// Add an immediate value to the Program Counter value and write the result
+    /// to the destination register.
+    ///
+    /// `ADR <Rd>,<label>`
+    Adr {
+        /// The destination register
+        rd: Register,
+        /// The offset to apply to the PC. Must be a multiple of 4 in the range
+        /// `0..=1020`.
+        imm8x4: u16,
+    },
     /// Subtract and Set (Immediate)
     ///
     /// Subtract an immediate value from a register value and write the result to a
@@ -666,12 +779,14 @@ pub enum Instruction {
         /// The register that contains the second operand
         rm: Register,
     },
-    /// Logical Shift Right with Set (Immediate).
+    /// Logical Shift Right with Set (Immediate) (aka Move and Set (Register))
     ///
     /// Shift register right by a number of bits given in an immediate
     /// value, shifting in zeros. Condition flags are updated.
     ///
-    /// `LSRS <Rx>,<Rx>,#<imm>`
+    /// If the immediate value is #0, this is a `MOVS` instruction.
+    ///
+    /// `LSRS <Rx>,<Rx>,#<imm>` or `MOVS <Rd>,<Rm>`
     LsrsImm {
         /// The destination register
         rd: Register,
@@ -768,6 +883,17 @@ pub enum Instruction {
         /// The register that contains the second operand
         rm: Register,
     },
+    /// Bitwise Not (Register)
+    ///
+    /// Writes the bitwise inverse of a register value to the destination register.
+    ///
+    /// `MVNS <Rd>,<Rm>`
+    MvnsReg {
+        /// The destination register
+        rd: Register,
+        /// The register that contains the operand
+        rm: Register,
+    },
     // =======================================================================
     // Other Instructions
     // =======================================================================
@@ -817,22 +943,69 @@ pub enum Instruction {
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Instruction::Branch { imm32 } => write!(f, "B {:+#}", *imm32 + 4),
-            Instruction::BranchConditional { cond, imm32 } => {
-                write!(f, "B{} {:+#}", cond, *imm32 + 4)
+            Instruction::Branch { imm11x2 } => {
+                write!(f, "B {:+#}", *imm11x2 + 4)
             }
-            Instruction::BranchLink { imm32 } => write!(f, "BL {:+#}", *imm32 + 4),
-            Instruction::BranchExchange { rm } => write!(f, "BX {}", *rm),
-            Instruction::BranchLinkExchange { rm } => write!(f, "BLX {}", *rm),
-            Instruction::MovsImm { rd, imm8 } => write!(f, "MOVS {rd},#{imm8}"),
-            Instruction::MovReg { rd, rm } => write!(f, "MOV {rd},{rm}"),
-            Instruction::MovsReg { rd, rm } => write!(f, "MOVS {rd},{rm}"),
-            Instruction::StrImm { rt, rn, imm5x4 } => write!(f, "STR {rt},[{rn},#{imm5x4}]"),
-            Instruction::StrbImm { rt, rn, imm5 } => write!(f, "STRB {rt},[{rn},#{imm5}]"),
-            Instruction::StrbReg { rt, rn, rm } => write!(f, "STRB {rt},[{rn},{rm}]"),
-            Instruction::LdrLiteral { rt, imm8x4 } => write!(f, "LDR {rt},[PC,#{imm8x4}]"),
-            Instruction::LdrImm { rt, rn, imm5x4 } => write!(f, "LDR {rt},[{rn},#{imm5x4}]"),
-            Instruction::LdrbImm { rt, rn, imm5 } => write!(f, "LDRB {rt},[{rn},#{imm5}]"),
+            Instruction::BranchConditional { cond, imm8x2 } => {
+                write!(f, "B{} {:+#}", cond, *imm8x2 + 4)
+            }
+            Instruction::BranchLink { imm24 } => {
+                write!(f, "BL {:+#}", *imm24 + 4)
+            }
+            Instruction::BranchExchange { rm } => {
+                write!(f, "BX {}", *rm)
+            }
+            Instruction::BranchLinkExchange { rm } => {
+                write!(f, "BLX {}", *rm)
+            }
+            Instruction::MovsImm { rd, imm8 } => {
+                write!(f, "MOVS {rd},#{imm8}")
+            }
+            Instruction::MovReg { rd, rm } => {
+                write!(f, "MOV {rd},{rm}")
+            }
+            Instruction::StrImm { rt, rn, imm5x4 } => {
+                write!(f, "STR {rt},[{rn},#{imm5x4}]")
+            }
+            Instruction::StrReg { rt, rn, rm } => {
+                write!(f, "STR {rt},[{rn},{rm}]")
+            }
+            Instruction::StrhImm { rt, rn, imm5x2 } => {
+                write!(f, "STRH {rt},[{rn},#{imm5x2}]")
+            }
+            Instruction::StrhReg { rt, rn, rm } => {
+                write!(f, "STRH {rt},[{rn},{rm}]")
+            }
+            Instruction::StrbImm { rt, rn, imm5 } => {
+                write!(f, "STRB {rt},[{rn},#{imm5}]")
+            }
+            Instruction::StrbReg { rt, rn, rm } => {
+                write!(f, "STRB {rt},[{rn},{rm}]")
+            }
+            Instruction::LdrLiteral { rt, imm8x4 } => {
+                write!(f, "LDR {rt},[PC,#{imm8x4}]")
+            }
+            Instruction::LdrImm { rt, rn, imm5x4 } => {
+                write!(f, "LDR {rt},[{rn},#{imm5x4}]")
+            }
+            Instruction::LdrReg { rt, rn, rm } => {
+                write!(f, "LDR {rt},[{rn},{rm}]")
+            }
+            Instruction::LdrhImm { rt, rn, imm5x2 } => {
+                write!(f, "LDRH {rt},[{rn},#{imm5x2}]")
+            }
+            Instruction::LdrhReg { rt, rn, rm } => {
+                write!(f, "LDRH {rt},[{rn},{rm}]")
+            }
+            Instruction::LdrbImm { rt, rn, imm5 } => {
+                write!(f, "LDRB {rt},[{rn},#{imm5}]")
+            }
+            Instruction::LdrbReg { rt, rn, rm } => {
+                write!(f, "LDRB {rt},[{rn},{rm}]")
+            }
+            Instruction::LdrsbReg { rt, rn, rm } => {
+                write!(f, "LDRSB {rt},[{rn},{rm}]")
+            }
             Instruction::Push { register_list, m } => {
                 write!(f, "PUSH {{{}", register_list)?;
                 if *m {
@@ -859,33 +1032,97 @@ impl std::fmt::Display for Instruction {
             Instruction::Stmia { rn, register_list } => {
                 write!(f, "STMIA {}!,{{{}}}", rn, register_list)
             }
-            Instruction::AddSpImmReg { rd, imm8x4 } => write!(f, "ADD {rd},SP,#{imm8x4}"),
-            Instruction::AddSpImm { imm7x4 } => write!(f, "ADD SP,#{imm7x4}",),
-            Instruction::SubSpImm { imm7x4 } => write!(f, "SUB SP,#{imm7x4}",),
-            Instruction::LdrSpImm { rt, imm8x4 } => write!(f, "LDR {rt},[SP,#{imm8x4}]"),
-            Instruction::StrSpImm { rt, imm8x4 } => write!(f, "STR {rt},[SP,#{imm8x4}]"),
-            Instruction::AddsImm3 { rd, rn, imm3 } => write!(f, "ADDS {rd},{rn},#{imm3}"),
-            Instruction::AddsImm8 { rdn, imm8 } => write!(f, "ADDS {rdn},#{imm8}"),
-            Instruction::AddsReg { rd, rn, rm } => write!(f, "ADDS {rd},{rn},{rm}"),
-            Instruction::AdcsReg { rdn, rm } => write!(f, "ADCS {rdn},{rm}"),
-            Instruction::SubsImm3 { rd, rn, imm3 } => write!(f, "SUBS {rd},{rn},#{imm3}"),
-            Instruction::SubsImm8 { rdn, imm8 } => write!(f, "SUBS {rdn},#{imm8}"),
-            Instruction::SubsReg { rd, rn, rm } => write!(f, "SUBS {rd},{rn},{rm}"),
-            Instruction::RsbImm { rd, rn } => write!(f, "RSBS {rd},{rn},#0"),
-            Instruction::LslsImm { rd, rm, imm5 } => write!(f, "LSLS {rd},{rm},#{imm5}"),
-            Instruction::LslsReg { rdn, rm } => write!(f, "LSLS {rdn},{rm}"),
-            Instruction::LsrsImm { rd, rm, imm5 } => write!(f, "LSRS {rd},{rm},#{imm5}"),
-            Instruction::LsrsReg { rdn, rm } => write!(f, "LSRS {rdn},{rm}"),
-            Instruction::Uxtb { rd, rm } => write!(f, "UXTB {rd},{rm}"),
-            Instruction::CmpReg { rn, rm } => write!(f, "CMP {rn},{rm}"),
-            Instruction::CmpImm { rn, imm8 } => write!(f, "CMP {rn},#{imm8}"),
-            Instruction::AndsReg { rdn, rm } => write!(f, "ANDS {rdn},{rm}"),
-            Instruction::OrrsReg { rdn, rm } => write!(f, "ORRS {rdn},{rm}"),
-            Instruction::BicsReg { rdn, rm } => write!(f, "BICS {rdn},{rm}"),
-            Instruction::Breakpoint { imm8 } => write!(f, "BKPT 0x{imm8:02x}",),
-            Instruction::Mrs { rd, sys_m } => write!(f, "MRS {rd},{sys_m}"),
-            Instruction::Msr { rn, sys_m } => write!(f, "MSR {rn},{sys_m}"),
-            Instruction::Cps { im } => write!(f, "CPSI{} i", if *im { "D" } else { "E" }),
+            Instruction::AddSpImmReg { rd, imm8x4 } => {
+                write!(f, "ADD {rd},SP,#{imm8x4}")
+            }
+            Instruction::AddSpImm { imm7x4 } => {
+                write!(f, "ADD SP,#{imm7x4}",)
+            }
+            Instruction::SubSpImm { imm7x4 } => {
+                write!(f, "SUB SP,#{imm7x4}",)
+            }
+            Instruction::LdrSpImm { rt, imm8x4 } => {
+                write!(f, "LDR {rt},[SP,#{imm8x4}]")
+            }
+            Instruction::StrSpImm { rt, imm8x4 } => {
+                write!(f, "STR {rt},[SP,#{imm8x4}]")
+            }
+            Instruction::AddsImm3 { rd, rn, imm3 } => {
+                write!(f, "ADDS {rd},{rn},#{imm3}")
+            }
+            Instruction::AddsImm8 { rdn, imm8 } => {
+                write!(f, "ADDS {rdn},#{imm8}")
+            }
+            Instruction::AddsReg { rd, rn, rm } => {
+                write!(f, "ADDS {rd},{rn},{rm}")
+            }
+            Instruction::AdcsReg { rdn, rm } => {
+                write!(f, "ADCS {rdn},{rm}")
+            }
+            Instruction::Adr { rd, imm8x4 } => {
+                write!(f, "ADR {rd},#{imm8x4}")
+            }
+            Instruction::SubsImm3 { rd, rn, imm3 } => {
+                write!(f, "SUBS {rd},{rn},#{imm3}")
+            }
+            Instruction::SubsImm8 { rdn, imm8 } => {
+                write!(f, "SUBS {rdn},#{imm8}")
+            }
+            Instruction::SubsReg { rd, rn, rm } => {
+                write!(f, "SUBS {rd},{rn},{rm}")
+            }
+            Instruction::RsbImm { rd, rn } => {
+                write!(f, "RSBS {rd},{rn},#0")
+            }
+            Instruction::LslsImm { rd, rm, imm5 } => {
+                if *imm5 == 0 {
+                    write!(f, "MOVS {rd},{rm}")
+                } else {
+                    write!(f, "LSLS {rd},{rm},#{imm5}")
+                }
+            }
+            Instruction::LslsReg { rdn, rm } => {
+                write!(f, "LSLS {rdn},{rm}")
+            }
+            Instruction::LsrsImm { rd, rm, imm5 } => {
+                write!(f, "LSRS {rd},{rm},#{imm5}")
+            }
+            Instruction::LsrsReg { rdn, rm } => {
+                write!(f, "LSRS {rdn},{rm}")
+            }
+            Instruction::Uxtb { rd, rm } => {
+                write!(f, "UXTB {rd},{rm}")
+            }
+            Instruction::CmpReg { rn, rm } => {
+                write!(f, "CMP {rn},{rm}")
+            }
+            Instruction::CmpImm { rn, imm8 } => {
+                write!(f, "CMP {rn},#{imm8}")
+            }
+            Instruction::AndsReg { rdn, rm } => {
+                write!(f, "ANDS {rdn},{rm}")
+            }
+            Instruction::OrrsReg { rdn, rm } => {
+                write!(f, "ORRS {rdn},{rm}")
+            }
+            Instruction::BicsReg { rdn, rm } => {
+                write!(f, "BICS {rdn},{rm}")
+            }
+            Instruction::MvnsReg { rd, rm } => {
+                write!(f, "MVNS {rd},{rm}")
+            }
+            Instruction::Breakpoint { imm8 } => {
+                write!(f, "BKPT 0x{imm8:02x}",)
+            }
+            Instruction::Mrs { rd, sys_m } => {
+                write!(f, "MRS {rd},{sys_m}")
+            }
+            Instruction::Msr { rn, sys_m } => {
+                write!(f, "MSR {rn},{sys_m}")
+            }
+            Instruction::Cps { im } => {
+                write!(f, "CPSI{} i", if *im { "D" } else { "E" })
+            }
         }
     }
 }
@@ -1119,7 +1356,7 @@ impl Armv6M {
             let imm8 = word as u8;
             Ok(Instruction::BranchConditional {
                 cond: Condition::from(cond),
-                imm32: Self::sign_extend_imm8(imm8) << 1,
+                imm8x2: Self::sign_extend_imm8(imm8) << 1,
             })
         } else if (word >> 11) == 0b11110 {
             // This is a 32-bit BL <label>
@@ -1147,7 +1384,7 @@ impl Armv6M {
             })
         } else if (word >> 11) == 0b11100 {
             Ok(Instruction::Branch {
-                imm32: Self::sign_extend_imm11(word & 0x7FF) << 1,
+                imm11x2: Self::sign_extend_imm11(word & 0x7FF) << 1,
             })
         } else if (word >> 11) == 0b10101 {
             let imm8 = (word & 0xFF) as u8;
@@ -1170,23 +1407,14 @@ impl Armv6M {
                 rt: Register::from(rt),
                 imm8x4: u16::from(imm8) << 2,
             })
-        } else if (word >> 11) == 0b01110 {
+        } else if (word >> 11) == 0b01101 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
-            Ok(Instruction::StrbImm {
+            Ok(Instruction::LdrImm {
                 rt: Register::from(rt),
                 rn: Register::from(rn),
-                imm5,
-            })
-        } else if (word >> 11) == 0b01111 {
-            let imm5 = ((word >> 6) & 0x1F) as u8;
-            let rn = ((word >> 3) & 0b111) as u8;
-            let rt = (word & 0b111) as u8;
-            Ok(Instruction::LdrbImm {
-                rt: Register::from(rt),
-                rn: Register::from(rn),
-                imm5,
+                imm5x4: imm5 << 2,
             })
         } else if (word >> 11) == 0b01100 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
@@ -1197,18 +1425,43 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5x4: imm5 << 2,
             })
-        } else if (word >> 11) == 0b01101 {
+        } else if (word >> 11) == 0b10001 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
-            Ok(Instruction::LdrImm {
+            Ok(Instruction::LdrhImm {
                 rt: Register::from(rt),
                 rn: Register::from(rn),
-                imm5x4: imm5 << 2,
+                imm5x2: imm5 << 1,
             })
-        } else if (word >> 11) == 0b00000 && (word >> 6) != 0 {
-            // Note: don't mix up LSL Rd,Rm,#0 with the otherwise identical MOVS
-            // Rd,Rm
+        } else if (word >> 11) == 0b10000 {
+            let imm5 = ((word >> 6) & 0x1F) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::StrhImm {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                imm5x2: imm5 << 1,
+            })
+        } else if (word >> 11) == 0b01111 {
+            let imm5 = ((word >> 6) & 0x1F) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::LdrbImm {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                imm5,
+            })
+        } else if (word >> 11) == 0b01110 {
+            let imm5 = ((word >> 6) & 0x1F) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::StrbImm {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                imm5,
+            })
+        } else if (word >> 11) == 0b00000 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1256,6 +1509,13 @@ impl Armv6M {
             Ok(Instruction::Ldmia {
                 rn: Register::from(rn),
                 register_list: RegisterList::new(register_list),
+            })
+        } else if (word >> 11) == 0b10100 {
+            let imm8 = (word & 0xFF) as u8;
+            let rd = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::Adr {
+                rd: Register::from(rd),
+                imm8x4: u16::from(imm8) << 2,
             })
         } else if (word >> 9) == 0b1011010 {
             let m = ((word >> 8) & 1) == 1;
@@ -1307,11 +1567,65 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
+        } else if (word >> 9) == 0b0101000 {
+            let rm = ((word >> 6) & 0b111) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::StrReg {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 9) == 0b0101001 {
+            let rm = ((word >> 6) & 0b111) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::StrhReg {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                rm: Register::from(rm),
+            })
         } else if (word >> 9) == 0b0101010 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
             Ok(Instruction::StrbReg {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 9) == 0b0101100 {
+            let rm = ((word >> 6) & 0b111) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::LdrReg {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 9) == 0b0101101 {
+            let rm = ((word >> 6) & 0b111) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::LdrhReg {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 9) == 0b0101110 {
+            let rm = ((word >> 6) & 0b111) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::LdrbReg {
+                rt: Register::from(rt),
+                rn: Register::from(rn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 9) == 0b0101011 {
+            let rm = ((word >> 6) & 0b111) as u8;
+            let rn = ((word >> 3) & 0b111) as u8;
+            let rt = (word & 0b111) as u8;
+            Ok(Instruction::LdrsbReg {
                 rt: Register::from(rt),
                 rn: Register::from(rn),
                 rm: Register::from(rm),
@@ -1396,6 +1710,13 @@ impl Armv6M {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
+        } else if (word >> 6) == 0b0100001111 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::MvnsReg {
+                rd: Register::from(rd),
+                rm: Register::from(rm),
+            })
         } else if (word >> 6) == 0b0100001001 {
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1408,13 +1729,6 @@ impl Armv6M {
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::AdcsReg {
                 rdn: Register::from(rdn),
-                rm: Register::from(rm),
-            })
-        } else if (word >> 6) == 0b0000000000 {
-            let rm = ((word >> 3) & 0b111) as u8;
-            let rd = (word & 0b111) as u8;
-            Ok(Instruction::MovsReg {
-                rd: Register::from(rd),
                 rm: Register::from(rm),
             })
         } else if (word >> 5) == 0b10110110011 {
@@ -1440,9 +1754,9 @@ impl Armv6M {
             let imm11 = j1_1_j2_imm11 & 0x7FF;
             let i1 = if j1 == s { 1 << 23 } else { 0 };
             let i2 = if j2 == s { 1 << 22 } else { 0 };
-            let imm32 = s_prefix | i1 | i2 | (imm10 << 12) | (imm11 << 1);
+            let imm24 = s_prefix | i1 | i2 | (imm10 << 12) | (imm11 << 1);
             Ok(Instruction::BranchLink {
-                imm32: imm32 as i32,
+                imm24: imm24 as i32,
             })
         } else if (word1 == 0b1111001111101111) && (word2 >> 12) == 0b1000 {
             let sys_m = (word2 & 0xFF) as u8;
@@ -1475,23 +1789,23 @@ impl Armv6M {
             // =======================================================================
             // Branch Instructions
             // =======================================================================
-            Instruction::Branch { imm32 } => {
+            Instruction::Branch { imm11x2 } => {
                 // Assume PC's next increment has happened already
                 self.pc = self.pc.wrapping_add(2);
-                self.pc = self.pc.wrapping_add(imm32 as u32);
+                self.pc = self.pc.wrapping_add(imm11x2 as u32);
             }
-            Instruction::BranchConditional { cond, imm32 } => {
+            Instruction::BranchConditional { cond, imm8x2 } => {
                 if self.check_condition(cond) {
                     // Assume PC's next increment has happened already
                     self.pc = self.pc.wrapping_add(2);
-                    self.pc = self.pc.wrapping_add(imm32 as u32);
+                    self.pc = self.pc.wrapping_add(imm8x2 as u32);
                 }
             }
-            Instruction::BranchLink { imm32 } => {
+            Instruction::BranchLink { imm24 } => {
                 // Assume PC's next increment has happened already
                 let old_pc = self.pc.wrapping_add(2);
                 self.lr = (old_pc & !1) | 1;
-                self.pc = old_pc.wrapping_add(imm32 as u32);
+                self.pc = old_pc.wrapping_add(imm24 as u32);
             }
             Instruction::BranchExchange { rm } => {
                 let addr = self.fetch_reg(rm);
@@ -1529,14 +1843,6 @@ impl Armv6M {
                     self.store_reg(rd, value);
                 }
             }
-            Instruction::MovsReg { rd, rm } => {
-                let value = self.fetch_reg(rm);
-                self.store_reg(rd, value);
-                self.set_z(value == 0);
-                self.set_n(value >= 0x80000000);
-                // c is unchanged
-                // v is unchanged
-            }
             // =======================================================================
             // Store Instructions
             // =======================================================================
@@ -1545,6 +1851,26 @@ impl Armv6M {
                 let offset_addr = addr.wrapping_add(u32::from(imm5x4));
                 let value = self.fetch_reg(rt);
                 memory.store_u32(offset_addr, value)?;
+            }
+            Instruction::StrReg { rt, rn, rm } => {
+                let offset = self.fetch_reg(rm);
+                let addr = self.fetch_reg(rn);
+                let offset_addr = addr.wrapping_add(offset);
+                let value = self.fetch_reg(rt);
+                memory.store_u32(offset_addr, value)?;
+            }
+            Instruction::StrhImm { rt, rn, imm5x2 } => {
+                let addr = self.fetch_reg(rn);
+                let offset_addr = addr.wrapping_add(u32::from(imm5x2));
+                let value = self.fetch_reg(rt);
+                memory.store_u16(offset_addr, value as u16)?;
+            }
+            Instruction::StrhReg { rt, rn, rm } => {
+                let offset = self.fetch_reg(rm);
+                let addr = self.fetch_reg(rn);
+                let offset_addr = addr.wrapping_add(offset);
+                let value = self.fetch_reg(rt);
+                memory.store_u16(offset_addr, value as u16)?;
             }
             Instruction::StrbImm { rt, rn, imm5 } => {
                 let addr = self.fetch_reg(rn);
@@ -1576,11 +1902,45 @@ impl Armv6M {
                 let value = memory.load_u32(offset_addr)?;
                 self.store_reg(rt, value);
             }
+            Instruction::LdrReg { rt, rn, rm } => {
+                let addr = self.fetch_reg(rn);
+                let offset = self.fetch_reg(rm);
+                let offset_addr = addr.wrapping_add(offset);
+                let value = memory.load_u32(offset_addr)?;
+                self.store_reg(rt, value);
+            }
+            Instruction::LdrhImm { rt, rn, imm5x2 } => {
+                let addr = self.fetch_reg(rn);
+                let offset_addr = addr.wrapping_add(u32::from(imm5x2));
+                let value = memory.load_u16(offset_addr)?;
+                self.store_reg(rt, u32::from(value));
+            }
+            Instruction::LdrhReg { rt, rn, rm } => {
+                let addr = self.fetch_reg(rn);
+                let offset = self.fetch_reg(rm);
+                let offset_addr = addr.wrapping_add(offset);
+                let value = memory.load_u16(offset_addr)?;
+                self.store_reg(rt, u32::from(value));
+            }
             Instruction::LdrbImm { rt, rn, imm5 } => {
                 let addr = self.fetch_reg(rn);
                 let offset_addr = addr.wrapping_add(u32::from(imm5));
-                let value = memory.load_u32(offset_addr)? & 0xFF;
-                self.store_reg(rt, value);
+                let value = memory.load_u8(offset_addr)?;
+                self.store_reg(rt, u32::from(value));
+            }
+            Instruction::LdrbReg { rt, rn, rm } => {
+                let addr = self.fetch_reg(rn);
+                let offset = self.fetch_reg(rm);
+                let offset_addr = addr.wrapping_add(offset);
+                let value = memory.load_u8(offset_addr)?;
+                self.store_reg(rt, u32::from(value));
+            }
+            Instruction::LdrsbReg { rt, rn, rm } => {
+                let addr = self.fetch_reg(rn);
+                let offset = self.fetch_reg(rm);
+                let offset_addr = addr.wrapping_add(offset);
+                let value = memory.load_u8(offset_addr)?;
+                self.store_reg(rt, i32::from(value as i8) as u32);
             }
             // =======================================================================
             // Stack Instructions
@@ -1700,6 +2060,11 @@ impl Armv6M {
                 self.set_c(carry_out);
                 self.set_v(overflow);
                 self.store_reg(rdn, result);
+            }
+            Instruction::Adr { rd, imm8x4 } => {
+                let base = (self.pc.wrapping_add(2)) & !0b11;
+                let addr = base.wrapping_add(u32::from(imm8x4));
+                self.store_reg(rd, addr);
             }
             Instruction::SubsImm3 { rd, rn, imm3 } => {
                 let value1 = self.fetch_reg(rn);
@@ -1840,6 +2205,13 @@ impl Armv6M {
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
                 self.store_reg(rdn, result);
+            }
+            Instruction::MvnsReg { rd, rm } => {
+                let value_m = self.fetch_reg(rm);
+                let result = !value_m;
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.store_reg(rd, result);
             }
             // =======================================================================
             // Other Instructions
@@ -2171,21 +2543,21 @@ mod test {
     // =======================================================================
     #[test]
     fn branch_instruction() {
-        let i = Armv6M::decode(0xe7fe);
-        assert_eq!(Ok(Instruction::Branch { imm32: -4 }), i);
+        let i = Armv6M::decode(0b1110011111111110);
+        assert_eq!(Ok(Instruction::Branch { imm11x2: -4 }), i);
         assert_eq!("B +0", format!("{}", i.unwrap()));
 
-        let i = Armv6M::decode(0xe7fc);
-        assert_eq!(Ok(Instruction::Branch { imm32: -8 }), i);
+        let i = Armv6M::decode(0b1110011111111100);
+        assert_eq!(Ok(Instruction::Branch { imm11x2: -8 }), i);
         assert_eq!("B -4", format!("{}", i.unwrap()));
 
-        let i = Armv6M::decode(0xe001);
-        assert_eq!(Ok(Instruction::Branch { imm32: 2 }), i);
+        let i = Armv6M::decode(0b1110000000000001);
+        assert_eq!(Ok(Instruction::Branch { imm11x2: 2 }), i);
         assert_eq!("B +6", format!("{}", i.unwrap()));
 
         let mut cpu = Armv6M::new(0, 8);
         let mut ram = [0u32; 6];
-        cpu.execute(Instruction::Branch { imm32: -4 }, &mut ram)
+        cpu.execute(Instruction::Branch { imm11x2: -4 }, &mut ram)
             .unwrap();
         // PC was 8, PC is still 8, because `0xe7fe` means spin in a loop
         assert_eq!(cpu.pc, 8);
@@ -2193,11 +2565,11 @@ mod test {
 
     #[test]
     fn beq_instruction() {
-        let i = Armv6M::decode(0xd003);
+        let i = Armv6M::decode(0b1101000000000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Eq,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2206,11 +2578,11 @@ mod test {
 
     #[test]
     fn bne_instruction() {
-        let i = Armv6M::decode(0xd103);
+        let i = Armv6M::decode(0b1101000100000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Ne,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2219,11 +2591,11 @@ mod test {
 
     #[test]
     fn bcs_instruction() {
-        let i = Armv6M::decode(0xd203);
+        let i = Armv6M::decode(0b1101001000000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Cs,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2232,11 +2604,11 @@ mod test {
 
     #[test]
     fn bcc_instruction() {
-        let i = Armv6M::decode(0xd303);
+        let i = Armv6M::decode(0b1101001100000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Cc,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2245,11 +2617,11 @@ mod test {
 
     #[test]
     fn bmi_instruction() {
-        let i = Armv6M::decode(0xd403);
+        let i = Armv6M::decode(0b1101010000000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Mi,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2258,11 +2630,11 @@ mod test {
 
     #[test]
     fn bpl_instruction() {
-        let i = Armv6M::decode(0xd503);
+        let i = Armv6M::decode(0b1101010100000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Pl,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2271,11 +2643,11 @@ mod test {
 
     #[test]
     fn bvs_instruction() {
-        let i = Armv6M::decode(0xd603);
+        let i = Armv6M::decode(0b1101011000000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Vs,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2284,11 +2656,11 @@ mod test {
 
     #[test]
     fn bvc_instruction() {
-        let i = Armv6M::decode(0xd703);
+        let i = Armv6M::decode(0b1101011100000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Vc,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2297,11 +2669,11 @@ mod test {
 
     #[test]
     fn bhi_instruction() {
-        let i = Armv6M::decode(0xd803);
+        let i = Armv6M::decode(0b1101100000000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Hi,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2310,11 +2682,11 @@ mod test {
 
     #[test]
     fn bls_instruction() {
-        let i = Armv6M::decode(0xd903);
+        let i = Armv6M::decode(0b1101100100000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Ls,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2323,11 +2695,11 @@ mod test {
 
     #[test]
     fn bge_instruction() {
-        let i = Armv6M::decode(0xda03);
+        let i = Armv6M::decode(0b1101101000000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Ge,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2336,11 +2708,11 @@ mod test {
 
     #[test]
     fn blt_instruction() {
-        let i = Armv6M::decode(0xdb03);
+        let i = Armv6M::decode(0b1101101100000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Lt,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2349,11 +2721,11 @@ mod test {
 
     #[test]
     fn bgt_instruction() {
-        let i = Armv6M::decode(0xdc03);
+        let i = Armv6M::decode(0b1101110000000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Gt,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2362,11 +2734,11 @@ mod test {
 
     #[test]
     fn ble_instruction() {
-        let i = Armv6M::decode(0xdd03);
+        let i = Armv6M::decode(0b1101110100000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Le,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2375,11 +2747,11 @@ mod test {
 
     #[test]
     fn balways_instruction() {
-        let i = Armv6M::decode(0xde03);
+        let i = Armv6M::decode(0b1101111000000011);
         assert_eq!(
             Ok(Instruction::BranchConditional {
                 cond: Condition::Always,
-                imm32: 6
+                imm8x2: 6
             }),
             i
         );
@@ -2388,9 +2760,12 @@ mod test {
 
     #[test]
     fn branch_link_instruction() {
-        assert_eq!(Err(Error::WideInstruction), Armv6M::decode(0xF04A));
+        assert_eq!(
+            Err(Error::WideInstruction),
+            Armv6M::decode(0b1111000001001010)
+        );
         let i = Armv6M::decode32(0xF04A, 0xFE41);
-        assert_eq!(Ok(Instruction::BranchLink { imm32: 0x4ac82 }), i);
+        assert_eq!(Ok(Instruction::BranchLink { imm24: 0x4ac82 }), i);
         assert_eq!("BL +306310", format!("{}", i.unwrap()));
     }
 
@@ -2401,7 +2776,7 @@ mod test {
         let start_pc = 0xd0;
         let mut cpu = Armv6M::new(sp, start_pc);
         let mut ram = [15; 8];
-        cpu.execute(Instruction::BranchLink { imm32: 0x4ac82 }, &mut ram)
+        cpu.execute(Instruction::BranchLink { imm24: 0x4ac82 }, &mut ram)
             .unwrap();
         assert_eq!(start_pc + 5, cpu.lr);
         assert_eq!(0x4ad56, cpu.pc);
@@ -2409,7 +2784,7 @@ mod test {
 
     #[test]
     fn branch_exchange_instruction() {
-        let i = Armv6M::decode(0x4770);
+        let i = Armv6M::decode(0b0100011101110000);
         assert_eq!(Ok(Instruction::BranchExchange { rm: Register::Lr }), i);
         assert_eq!("BX LR", format!("{}", i.unwrap()));
     }
@@ -2427,7 +2802,7 @@ mod test {
     }
     #[test]
     fn branch_link_exchange_instruction() {
-        let i = Armv6M::decode(0x4798);
+        let i = Armv6M::decode(0b0100011110011000);
         assert_eq!(Ok(Instruction::BranchLinkExchange { rm: Register::R3 }), i);
         assert_eq!("BLX R3", format!("{}", i.unwrap()));
     }
@@ -2453,7 +2828,7 @@ mod test {
     // =======================================================================
     #[test]
     fn movs_imm_instruction() {
-        let i = Armv6M::decode(0x2240);
+        let i = Armv6M::decode(0b0010001001000000);
         assert_eq!(
             Ok(Instruction::MovsImm {
                 rd: Register::R2,
@@ -2481,7 +2856,7 @@ mod test {
     }
     #[test]
     fn mov_reg_instruction() {
-        let i = Armv6M::decode(0x46B6);
+        let i = Armv6M::decode(0b0100011010110110);
         assert_eq!(
             Ok(Instruction::MovReg {
                 rd: Register::Lr,
@@ -2507,42 +2882,12 @@ mod test {
         .unwrap();
         assert_eq!(0x12345678, cpu.lr);
     }
-    #[test]
-    fn movs_reg_instruction() {
-        let i = Armv6M::decode(0x0035);
-        assert_eq!(
-            Ok(Instruction::MovsReg {
-                rd: Register::R5,
-                rm: Register::R6,
-            }),
-            i
-        );
-        assert_eq!("MOVS R5,R6", format!("{}", i.unwrap()));
-    }
-    #[test]
-    fn movs_reg_operation() {
-        let sp = 16;
-        let mut cpu = Armv6M::new(sp, 0);
-        let mut ram = [0; 8];
-        cpu.regs[6] = 0x80000000;
-        cpu.execute(
-            Instruction::MovsReg {
-                rd: Register::R5,
-                rm: Register::R6,
-            },
-            &mut ram,
-        )
-        .unwrap();
-        assert_eq!(0x80000000, cpu.regs[5]);
-        assert!(!cpu.is_z());
-        assert!(cpu.is_n());
-    }
     // =======================================================================
     // Store Instructions
     // =======================================================================
     #[test]
     fn str_immediate_instruction() {
-        let i = Armv6M::decode(0x602C);
+        let i = Armv6M::decode(0b0110000000101100);
         assert_eq!(
             Ok(Instruction::StrImm {
                 rt: Register::R4,
@@ -2569,12 +2914,111 @@ mod test {
             &mut ram,
         )
         .unwrap();
-        // R1 written to address 4 + (1 * 4) = 8
+        // R1 written to address 4 + 4 = 8
         assert_eq!([0, 0, 0x12345678, 0, 0, 0, 0, 0], ram);
     }
     #[test]
+    fn str_reg_instruction() {
+        let i = Armv6M::decode(0b0101000100101011);
+        assert_eq!(
+            Ok(Instruction::StrReg {
+                rt: Register::R3,
+                rn: Register::R5,
+                rm: Register::R4,
+            }),
+            i
+        );
+        assert_eq!("STR R3,[R5,R4]", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn str_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[1] = 4;
+        cpu.regs[2] = 0x12345678;
+        cpu.execute(
+            Instruction::StrReg {
+                rt: Register::R2,
+                rn: Register::R1,
+                rm: Register::R0,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!([0, 0, 0x12345678, 0, 0, 0, 0, 0], ram);
+    }
+
+    #[test]
+    fn strh_immediate_instruction() {
+        let i = Armv6M::decode(0b1000000000011001);
+        assert_eq!(
+            Ok(Instruction::StrhImm {
+                rt: Register::R1,
+                rn: Register::R3,
+                imm5x2: 0
+            }),
+            i
+        );
+        assert_eq!("STRH R1,[R3,#0]", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn strh_immediate_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[1] = 0x12345678;
+        cpu.execute(
+            Instruction::StrhImm {
+                rt: Register::R1,
+                rn: Register::R0,
+                imm5x2: 2,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // Lowest 16 bits of R1 written to address 4 + 2 = 6
+        assert_eq!([0, 0x56780000, 0, 0, 0, 0, 0, 0], ram);
+    }
+    #[test]
+    fn strh_reg_instruction() {
+        let i = Armv6M::decode(0b0101001100101011);
+        assert_eq!(
+            Ok(Instruction::StrhReg {
+                rt: Register::R3,
+                rn: Register::R5,
+                rm: Register::R4,
+            }),
+            i
+        );
+        assert_eq!("STRH R3,[R5,R4]", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn strh_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 2;
+        cpu.regs[1] = 4;
+        cpu.regs[2] = 0x12345678;
+        cpu.execute(
+            Instruction::StrhReg {
+                rt: Register::R2,
+                rn: Register::R1,
+                rm: Register::R0,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!([0, 0x56780000, 0, 0, 0, 0, 0, 0], ram);
+    }
+
+    #[test]
     fn strb_immediate_instruction() {
-        let i = Armv6M::decode(0x7019);
+        let i = Armv6M::decode(0b0111000000011001);
         assert_eq!(
             Ok(Instruction::StrbImm {
                 rt: Register::R1,
@@ -2607,7 +3051,7 @@ mod test {
     }
     #[test]
     fn strb_reg_instruction() {
-        let i = Armv6M::decode(0x552b);
+        let i = Armv6M::decode(0b0101010100101011);
         assert_eq!(
             Ok(Instruction::StrbReg {
                 rt: Register::R3,
@@ -2642,7 +3086,7 @@ mod test {
     // =======================================================================
     #[test]
     fn ldr_literal_instruction() {
-        let i = Armv6M::decode(0x4801);
+        let i = Armv6M::decode(0b0100100000000001);
         assert_eq!(
             Ok(Instruction::LdrLiteral {
                 rt: Register::R0,
@@ -2652,10 +3096,25 @@ mod test {
         );
         assert_eq!("LDR R0,[PC,#4]", format!("{}", i.unwrap()));
     }
-
+    #[test]
+    fn ldr_literal_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [1, 2, 0x12345678, 3, 4, 5, 6, 7];
+        cpu.execute(
+            Instruction::LdrLiteral {
+                rt: Register::R0,
+                imm8x4: 4,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // R1 loaded from address PC + 4 + 4
+        assert_eq!(0x12345678, cpu.regs[0]);
+    }
     #[test]
     fn ldr_immediate_instruction() {
-        let i = Armv6M::decode(0x682C);
+        let i = Armv6M::decode(0b0110100000101100);
         assert_eq!(
             Ok(Instruction::LdrImm {
                 rt: Register::R4,
@@ -2666,7 +3125,6 @@ mod test {
         );
         assert_eq!("LDR R4,[R5,#0]", format!("{}", i.unwrap()));
     }
-
     #[test]
     fn ldr_immediate_operation() {
         let sp = 16;
@@ -2682,12 +3140,107 @@ mod test {
             &mut ram,
         )
         .unwrap();
-        // R1 loaded from address 4 + (1 * 4) = 8
+        // R1 loaded from address 4 + 4 = 8
         assert_eq!(0x12345678, cpu.regs[1]);
     }
     #[test]
+    fn ldr_reg_instruction() {
+        let i = Armv6M::decode(0b0101100010001000);
+        assert_eq!(
+            Ok(Instruction::LdrReg {
+                rt: Register::R0,
+                rn: Register::R1,
+                rm: Register::R2,
+            }),
+            i
+        );
+        assert_eq!("LDR R0,[R1,R2]", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn ldr_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0, 0, 0x12345678, 0, 0, 0, 0, 0];
+        cpu.regs[1] = 4;
+        cpu.regs[2] = 4;
+        cpu.execute(
+            Instruction::LdrReg {
+                rt: Register::R0,
+                rn: Register::R1,
+                rm: Register::R2,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // R1 loaded from address 4 + 4 = 8
+        assert_eq!(0x12345678, cpu.regs[0]);
+    }
+    #[test]
+    fn ldrh_immediate_instruction() {
+        let i = Armv6M::decode(0b1000100001101100);
+        assert_eq!(
+            Ok(Instruction::LdrhImm {
+                rt: Register::R4,
+                rn: Register::R5,
+                imm5x2: 2
+            }),
+            i
+        );
+        assert_eq!("LDRH R4,[R5,#2]", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn ldrh_immediate_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0, 0, 0x12345678, 0, 0, 0, 0, 0];
+        cpu.regs[0] = 4;
+        cpu.execute(
+            Instruction::LdrhImm {
+                rt: Register::R1,
+                rn: Register::R0,
+                imm5x2: 4,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // R1 loaded from address 4 + 4 = 8
+        assert_eq!(0x5678, cpu.regs[1]);
+    }
+    #[test]
+    fn ldrh_reg_instruction() {
+        let i = Armv6M::decode(0b0101101010001001);
+        assert_eq!(
+            Ok(Instruction::LdrhReg {
+                rt: Register::R1,
+                rn: Register::R1,
+                rm: Register::R2
+            }),
+            i
+        );
+        assert_eq!("LDRH R1,[R1,R2]", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn ldrh_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0, 0, 0x12345678, 0, 0, 0, 0, 0];
+        cpu.regs[0] = 4;
+        cpu.regs[6] = 4;
+        cpu.execute(
+            Instruction::LdrhReg {
+                rt: Register::R1,
+                rn: Register::R0,
+                rm: Register::R6,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // R1 loaded from address 4 + 4 = 8
+        assert_eq!(0x5678, cpu.regs[1]);
+    }
+    #[test]
     fn ldrb_immediate_instruction() {
-        let i = Armv6M::decode(0x782C);
+        let i = Armv6M::decode(0b0111100000101100);
         assert_eq!(
             Ok(Instruction::LdrbImm {
                 rt: Register::R4,
@@ -2713,15 +3266,79 @@ mod test {
             &mut ram,
         )
         .unwrap();
-        // R1 loaded from address 4 + (1 * 4) = 8
+        // R1 loaded from address 4 + 4 = 8
         assert_eq!(0x78, cpu.regs[1]);
+    }
+    #[test]
+    fn ldrb_reg_instruction() {
+        let i = Armv6M::decode(0b0101110010101100);
+        assert_eq!(
+            Ok(Instruction::LdrbReg {
+                rt: Register::R4,
+                rn: Register::R5,
+                rm: Register::R2,
+            }),
+            i
+        );
+        assert_eq!("LDRB R4,[R5,R2]", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn ldrb_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0, 0, 0x12345678, 0, 0, 0, 0, 0];
+        cpu.regs[0] = 4;
+        cpu.regs[2] = 4;
+        cpu.execute(
+            Instruction::LdrbReg {
+                rt: Register::R1,
+                rn: Register::R0,
+                rm: Register::R2,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // R1 loaded from address 4 + 4 = 8
+        assert_eq!(0x78, cpu.regs[1]);
+    }
+    #[test]
+    fn ldrsb_reg_instruction() {
+        let i = Armv6M::decode(0b0101011010101100);
+        assert_eq!(
+            Ok(Instruction::LdrsbReg {
+                rt: Register::R4,
+                rn: Register::R5,
+                rm: Register::R2,
+            }),
+            i
+        );
+        assert_eq!("LDRSB R4,[R5,R2]", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn ldrsb_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0, 0, 0x12345680, 0, 0, 0, 0, 0];
+        cpu.regs[0] = 4;
+        cpu.regs[2] = 4;
+        cpu.execute(
+            Instruction::LdrsbReg {
+                rt: Register::R1,
+                rn: Register::R0,
+                rm: Register::R2,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        // R1 loaded from address 4 + 4 = 8
+        assert_eq!(0xFFFFFF80, cpu.regs[1]);
     }
     // =======================================================================
     // Stack Instructions
     // =======================================================================`
     #[test]
     fn push_instruction() {
-        let i = Armv6M::decode(0xb580);
+        let i = Armv6M::decode(0b1011010110000000);
         assert_eq!(
             // Push {LR, R7}
             Ok(Instruction::Push {
@@ -2732,7 +3349,7 @@ mod test {
         );
         assert_eq!("PUSH {R7,LR}", format!("{}", i.unwrap()));
 
-        let i = Armv6M::decode(0xb4FF);
+        let i = Armv6M::decode(0b1011010011111111);
         assert_eq!(
             Ok(Instruction::Push {
                 register_list: RegisterList::new(0xFF),
@@ -2769,7 +3386,7 @@ mod test {
 
     #[test]
     fn pop_instruction() {
-        let i = Armv6M::decode(0xbd80);
+        let i = Armv6M::decode(0b1011110110000000);
         assert_eq!(
             Ok(Instruction::Pop {
                 register_list: RegisterList::new(0x80),
@@ -2779,7 +3396,7 @@ mod test {
         );
         assert_eq!("POP {R7,PC}", format!("{}", i.unwrap()));
 
-        let i = Armv6M::decode(0xBCFF);
+        let i = Armv6M::decode(0b1011110011111111);
         assert_eq!(
             Ok(Instruction::Pop {
                 register_list: RegisterList::new(0xFF),
@@ -2810,7 +3427,7 @@ mod test {
 
     #[test]
     fn ldmia_instruction() {
-        let i = Armv6M::decode(0xc938);
+        let i = Armv6M::decode(0b1100100100111000);
         assert_eq!(
             Ok(Instruction::Ldmia {
                 rn: Register::R1,
@@ -2844,7 +3461,7 @@ mod test {
 
     #[test]
     fn stmia_instruction() {
-        let i = Armv6M::decode(0xc038);
+        let i = Armv6M::decode(0b1100000000111000);
         assert_eq!(
             Ok(Instruction::Stmia {
                 rn: Register::R0,
@@ -2879,7 +3496,7 @@ mod test {
 
     #[test]
     fn add_sp_imm_reg_instruction() {
-        let i = Armv6M::decode(0xaf00);
+        let i = Armv6M::decode(0b1010111100000000);
         assert_eq!(
             Ok(Instruction::AddSpImmReg {
                 rd: Register::R7,
@@ -2908,7 +3525,7 @@ mod test {
 
     #[test]
     fn add_sp_imm_instruction() {
-        let i = Armv6M::decode(0xb010);
+        let i = Armv6M::decode(0b1011000000010000);
         assert_eq!(Ok(Instruction::AddSpImm { imm7x4: 64 }), i);
         assert_eq!("ADD SP,#64", format!("{}", i.unwrap()));
     }
@@ -2925,7 +3542,7 @@ mod test {
 
     #[test]
     fn sub_sp_imm_instruction() {
-        let i = Armv6M::decode(0xb090);
+        let i = Armv6M::decode(0b1011000010010000);
         assert_eq!(Ok(Instruction::SubSpImm { imm7x4: 64 }), i);
         assert_eq!("SUB SP,#64", format!("{}", i.unwrap()));
     }
@@ -2942,7 +3559,7 @@ mod test {
 
     #[test]
     fn ldr_sp_imm_instruction() {
-        let i = Armv6M::decode(0x9902);
+        let i = Armv6M::decode(0b1001100100000010);
         assert_eq!(
             Ok(Instruction::LdrSpImm {
                 rt: Register::R1,
@@ -2971,7 +3588,7 @@ mod test {
 
     #[test]
     fn str_sp_imm_instruction() {
-        let i = Armv6M::decode(0x9502);
+        let i = Armv6M::decode(0b1001010100000010);
         assert_eq!(
             Ok(Instruction::StrSpImm {
                 rt: Register::R5,
@@ -3003,7 +3620,7 @@ mod test {
     // =======================================================================
     #[test]
     fn adds_imm3_instruction() {
-        let i = Armv6M::decode(0x1d00);
+        let i = Armv6M::decode(0b0001110100000000);
         assert_eq!(
             Ok(Instruction::AddsImm3 {
                 rd: Register::R0,
@@ -3038,7 +3655,7 @@ mod test {
     }
     #[test]
     fn adds_imm8_instruction() {
-        let i = Armv6M::decode(0x3004);
+        let i = Armv6M::decode(0b0011000000000100);
         assert_eq!(
             Ok(Instruction::AddsImm8 {
                 rdn: Register::R0,
@@ -3070,7 +3687,7 @@ mod test {
     }
     #[test]
     fn adds_reg_instruction() {
-        let i = Armv6M::decode(0x1840);
+        let i = Armv6M::decode(0b0001100001000000);
         assert_eq!(
             Ok(Instruction::AddsReg {
                 rd: Register::R0,
@@ -3106,7 +3723,7 @@ mod test {
     }
     #[test]
     fn adcs_reg_instruction() {
-        let i = Armv6M::decode(0x4148);
+        let i = Armv6M::decode(0b0100000101001000);
         assert_eq!(
             Ok(Instruction::AdcsReg {
                 rdn: Register::R0,
@@ -3139,8 +3756,36 @@ mod test {
         assert!(!cpu.is_v());
     }
     #[test]
+    fn adr_instruction() {
+        let i = Armv6M::decode(0b1010000000000001);
+        assert_eq!(
+            Ok(Instruction::Adr {
+                rd: Register::R0,
+                imm8x4: 4
+            }),
+            i
+        );
+        assert_eq!("ADR R0,#4", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn adr_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 4);
+        let mut ram = [0; 8];
+        cpu.set_c(true);
+        cpu.execute(
+            Instruction::Adr {
+                rd: Register::R0,
+                imm8x4: 4,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(12, cpu.regs[0]);
+    }
+    #[test]
     fn subs_imm3_instruction() {
-        let i = Armv6M::decode(0x1f00);
+        let i = Armv6M::decode(0b0001111100000000);
         assert_eq!(
             Ok(Instruction::SubsImm3 {
                 rd: Register::R0,
@@ -3175,7 +3820,7 @@ mod test {
     }
     #[test]
     fn subs_imm8_instruction() {
-        let i = Armv6M::decode(0x3c08);
+        let i = Armv6M::decode(0b0011110000001000);
         assert_eq!(
             Ok(Instruction::SubsImm8 {
                 rdn: Register::R4,
@@ -3207,7 +3852,7 @@ mod test {
     }
     #[test]
     fn subs_reg_instruction() {
-        let i = Armv6M::decode(0x1A40);
+        let i = Armv6M::decode(0b0001101001000000);
         assert_eq!(
             Ok(Instruction::SubsReg {
                 rd: Register::R0,
@@ -3244,7 +3889,7 @@ mod test {
     }
     #[test]
     fn rsb_imm_instruction() {
-        let i = Armv6M::decode(0x4241);
+        let i = Armv6M::decode(0b0100001001000001);
         assert_eq!(
             Ok(Instruction::RsbImm {
                 rd: Register::R1,
@@ -3276,7 +3921,7 @@ mod test {
     }
     #[test]
     fn lsls_imm_instruction() {
-        let i = Armv6M::decode(0x0081);
+        let i = Armv6M::decode(0b0000000010000001);
         // lsls	r1, r0, #2
         assert_eq!(
             Ok(Instruction::LslsImm {
@@ -3287,6 +3932,16 @@ mod test {
             i
         );
         assert_eq!("LSLS R1,R0,#2", format!("{}", i.unwrap()));
+        let i = Armv6M::decode(0b0000000000000001);
+        assert_eq!(
+            Ok(Instruction::LslsImm {
+                rd: Register::R1,
+                rm: Register::R0,
+                imm5: 0
+            }),
+            i
+        );
+        assert_eq!("MOVS R1,R0", format!("{}", i.unwrap()));
     }
     #[test]
     fn lsls_imm_operation() {
@@ -3311,7 +3966,7 @@ mod test {
     }
     #[test]
     fn lsls_reg_instruction() {
-        let i = Armv6M::decode(0x409c);
+        let i = Armv6M::decode(0b0100000010011100);
         // lsls	r1, r0, #2
         assert_eq!(
             Ok(Instruction::LslsReg {
@@ -3345,7 +4000,7 @@ mod test {
     }
     #[test]
     fn lsrs_imm_instruction() {
-        let i = Armv6M::decode(0x0881);
+        let i = Armv6M::decode(0b0000100010000001);
         assert_eq!(
             Ok(Instruction::LsrsImm {
                 rd: Register::R1,
@@ -3380,7 +4035,7 @@ mod test {
     }
     #[test]
     fn lsrs_reg_instruction() {
-        let i = Armv6M::decode(0x40dc);
+        let i = Armv6M::decode(0b0100000011011100);
         assert_eq!(
             Ok(Instruction::LsrsReg {
                 rdn: Register::R4,
@@ -3413,7 +4068,7 @@ mod test {
     }
     #[test]
     fn uxtb_instruction() {
-        let i = Armv6M::decode(0xb2c9);
+        let i = Armv6M::decode(0b1011001011001001);
         assert_eq!(
             Ok(Instruction::Uxtb {
                 rd: Register::R1,
@@ -3444,7 +4099,7 @@ mod test {
     // =======================================================================
     #[test]
     fn cmp_reg_instruction() {
-        let i = Armv6M::decode(0x4288);
+        let i = Armv6M::decode(0b0100001010001000);
         assert_eq!(
             Ok(Instruction::CmpReg {
                 rn: Register::R0,
@@ -3564,7 +4219,7 @@ mod test {
     }
     #[test]
     fn cmp_imm_instruction() {
-        let i = Armv6M::decode(0x2805);
+        let i = Armv6M::decode(0b0010100000000101);
         assert_eq!(
             Ok(Instruction::CmpImm {
                 rn: Register::R0,
@@ -3604,7 +4259,7 @@ mod test {
     }
     #[test]
     fn ands_reg_instruction() {
-        let i = Armv6M::decode(0x401e);
+        let i = Armv6M::decode(0b0100000000011110);
         assert_eq!(
             Ok(Instruction::AndsReg {
                 rdn: Register::R6,
@@ -3633,7 +4288,7 @@ mod test {
     }
     #[test]
     fn orrs_reg_instruction() {
-        let i = Armv6M::decode(0x431e);
+        let i = Armv6M::decode(0b0100001100011110);
         assert_eq!(
             Ok(Instruction::OrrsReg {
                 rdn: Register::R6,
@@ -3662,7 +4317,7 @@ mod test {
     }
     #[test]
     fn bics_reg_instruction() {
-        let i = Armv6M::decode(0x43ab);
+        let i = Armv6M::decode(0b0100001110101011);
         assert_eq!(
             Ok(Instruction::BicsReg {
                 rdn: Register::R3,
@@ -3689,12 +4344,40 @@ mod test {
         .unwrap();
         assert_eq!(cpu.regs[6], 0x00345600);
     }
+    #[test]
+    fn mvns_reg_instruction() {
+        let i = Armv6M::decode(0b0100001111101011);
+        assert_eq!(
+            Ok(Instruction::MvnsReg {
+                rd: Register::R3,
+                rm: Register::R5,
+            }),
+            i
+        );
+        assert_eq!("MVNS R3,R5", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn mvns_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[6] = 0x12345678;
+        cpu.execute(
+            Instruction::MvnsReg {
+                rd: Register::R3,
+                rm: Register::R6,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(cpu.regs[3], 0xedcba987);
+    }
     // =======================================================================
     // Other Instructions
     // =======================================================================
     #[test]
     fn bkpt_instruction() {
-        let i = Armv6M::decode(0xbecc);
+        let i = Armv6M::decode(0b1011111011001100);
         assert_eq!(Ok(Instruction::Breakpoint { imm8: 0xCC }), i);
         assert_eq!("BKPT 0xcc", format!("{}", i.unwrap()));
     }
@@ -3771,14 +4454,14 @@ mod test {
 
     #[test]
     fn cpsid_instruction() {
-        let i = Armv6M::decode(0xb672);
+        let i = Armv6M::decode(0b1011011001110010);
         assert_eq!(Ok(Instruction::Cps { im: true }), i);
         assert_eq!("CPSID i", format!("{}", i.unwrap()));
     }
 
     #[test]
     fn cpsie_instruction() {
-        let i = Armv6M::decode(0xb662);
+        let i = Armv6M::decode(0b1011011001100010);
         assert_eq!(Ok(Instruction::Cps { im: false }), i);
         assert_eq!("CPSIE i", format!("{}", i.unwrap()));
     }
