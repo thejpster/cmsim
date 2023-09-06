@@ -592,6 +592,15 @@ pub enum Instruction {
         /// the range `0..=508`.
         imm7x4: u32,
     },
+    /// Add, Stack Pointer plus Register.
+    ///
+    /// Increments the Stack Pointer by a register value.
+    ///
+    /// `ADD SP,<Rm>`
+    AddSpReg {
+        /// The register containing the value to add to SP
+        rm: Register,
+    },
     /// Subtract, Stack Pointer minus Immediate.
     ///
     /// Decrements the Stack Pointer by an immediate value.
@@ -735,6 +744,19 @@ pub enum Instruction {
         rd: Register,
         /// The register that contains the first operand.
         rn: Register,
+        /// The register that contains the second operand
+        rm: Register,
+    },
+    /// Subtract with Carry, and Set (Register)
+    ///
+    /// Subtracts a register value and the value of `!CarryFlag` from a register
+    /// value, and writes the result to the destination register. Condition
+    /// flags are updated.
+    ///
+    /// `SBCS <Rdn>,<Rm>`
+    SbcsReg {
+        /// The register that contains the first operand, and the destination
+        rdn: Register,
         /// The register that contains the second operand
         rm: Register,
     },
@@ -938,6 +960,15 @@ pub enum Instruction {
         /// `true` to mask (disable) interrupts, `false` to unmask (enable)
         im: bool,
     },
+    /// Data Memory Barrier
+    ///
+    /// Acts as a memory barrier. All explicit memory accesses that appear in
+    /// program order before the DMB instruction are observed before any
+    /// explicit memory accesses that appear in program order after the DMB
+    /// instruction.
+    ///
+    /// `DMB`
+    Dmb,
 }
 
 impl std::fmt::Display for Instruction {
@@ -1038,6 +1069,9 @@ impl std::fmt::Display for Instruction {
             Instruction::AddSpImm { imm7x4 } => {
                 write!(f, "ADD SP,#{imm7x4}",)
             }
+            Instruction::AddSpReg { rm } => {
+                write!(f, "ADD SP,{rm}")
+            }
             Instruction::SubSpImm { imm7x4 } => {
                 write!(f, "SUB SP,#{imm7x4}",)
             }
@@ -1070,6 +1104,9 @@ impl std::fmt::Display for Instruction {
             }
             Instruction::SubsReg { rd, rn, rm } => {
                 write!(f, "SUBS {rd},{rn},{rm}")
+            }
+            Instruction::SbcsReg { rdn, rm } => {
+                write!(f, "SBCS {rdn},{rm}")
             }
             Instruction::RsbImm { rd, rn } => {
                 write!(f, "RSBS {rd},{rn},#0")
@@ -1122,6 +1159,9 @@ impl std::fmt::Display for Instruction {
             }
             Instruction::Cps { im } => {
                 write!(f, "CPSI{} i", if *im { "D" } else { "E" })
+            }
+            Instruction::Dmb => {
+                write!(f, "DMB")
             }
         }
     }
@@ -1327,7 +1367,6 @@ impl Armv6M {
     /// Fetch, Decode and Execute one instruction.
     pub fn step(&mut self, memory: &mut dyn Memory) -> Result<(), Error> {
         let instruction = self.fetch(memory)?;
-        eprintln!("Got \"{}\" ({:?})", instruction, instruction);
         self.execute(instruction, memory)?;
         Ok(())
     }
@@ -1335,7 +1374,6 @@ impl Armv6M {
     /// Fetch an instruction from memory and decode it.
     pub fn fetch(&self, memory: &dyn Memory) -> Result<Instruction, Error> {
         let word = memory.load_u16(self.pc)?;
-        eprintln!("Loaded 0x{:04x} from 0x{:08x}", word, self.pc);
         match Self::decode(word) {
             Ok(i) => Ok(i),
             Err(Error::WideInstruction) => {
@@ -1661,6 +1699,11 @@ impl Armv6M {
             Ok(Instruction::SubSpImm {
                 imm7x4: u32::from(imm7) << 2,
             })
+        } else if (word >> 7) == 0b010001001 && (word & 0b111) == 0b101 {
+            let rm: u8 = ((word >> 3) & 0b1111) as u8;
+            Ok(Instruction::AddSpReg {
+                rm: Register::from(rm),
+            })
         } else if (word >> 6) == 0b0100000010 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
@@ -1731,6 +1774,13 @@ impl Armv6M {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
+        } else if (word >> 6) == 0b0100000110 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rdn = (word & 0b111) as u8;
+            Ok(Instruction::SbcsReg {
+                rdn: Register::from(rdn),
+                rm: Register::from(rm),
+            })
         } else if (word >> 5) == 0b10110110011 {
             let im = ((word >> 4) & 1) != 0;
             Ok(Instruction::Cps { im })
@@ -1772,6 +1822,8 @@ impl Armv6M {
                 rn: Register::from(rn),
                 sys_m,
             })
+        } else if (word1 >> 4) == 0b111100111011 && (word2 >> 4) == 0b100011110101 {
+            Ok(Instruction::Dmb)
         } else {
             Err(Error::InvalidInstruction32(word1, word2))
         }
@@ -1838,7 +1890,7 @@ impl Armv6M {
             Instruction::MovReg { rm, rd } => {
                 let value = self.fetch_reg(rm);
                 if rd == Register::Pc {
-                    self.store_reg(rd, value * 2);
+                    self.store_reg(rd, value & !1);
                 } else {
                     self.store_reg(rd, value);
                 }
@@ -2002,6 +2054,10 @@ impl Armv6M {
             Instruction::AddSpImm { imm7x4 } => {
                 self.sp = self.sp.wrapping_add(imm7x4);
             }
+            Instruction::AddSpReg { rm } => {
+                let offset = self.fetch_reg(rm);
+                self.sp = self.sp.wrapping_add(offset);
+            }
             Instruction::SubSpImm { imm7x4 } => {
                 // This does a subtraction
                 let value = self.sp.wrapping_add(!imm7x4).wrapping_add(1);
@@ -2095,6 +2151,17 @@ impl Armv6M {
                 self.set_c(carry_out);
                 self.set_v(overflow);
                 self.store_reg(rd, result);
+            }
+            Instruction::SbcsReg { rdn, rm } => {
+                let value1 = self.fetch_reg(rdn);
+                let value2 = self.fetch_reg(rm);
+                let (result, carry_out, overflow) =
+                    Self::add_with_carry(value1, !value2, self.is_c());
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+                self.set_v(overflow);
+                self.store_reg(rdn, result);
             }
             Instruction::RsbImm { rd, rn } => {
                 let value1 = self.fetch_reg(rn);
@@ -2255,6 +2322,12 @@ impl Armv6M {
                     self.primask &= !1;
                 }
             }
+            Instruction::Dmb => {
+                // Wide instruction
+                self.pc = self.pc.wrapping_add(2);
+                // Let's do a fence - unsure if required?
+                std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+            }
         }
         Ok(())
     }
@@ -2276,10 +2349,6 @@ impl Armv6M {
         let carry_out = u64::from(result) != uresult;
         let overflow_out = i64::from(result as i32) != sresult;
 
-        eprintln!(
-            "add_with_carry {:#x} + {:#x} + {} -> {:#x} c={} o={}",
-            value1, value2, carry_in, result, carry_out, overflow_out
-        );
         (result, carry_out, overflow_out)
     }
 
@@ -2307,7 +2376,6 @@ impl Armv6M {
     /// Push one value onto the stack
     fn push_stack(&mut self, value: u32, memory: &mut dyn Memory) -> Result<(), Error> {
         let sp = self.sp - 4;
-        eprintln!("Pushing {:08x} to {:08x}", value, sp);
         memory.store_u32(sp, value)?;
         self.store_reg(Register::Sp, sp);
         Ok(())
@@ -2316,7 +2384,6 @@ impl Armv6M {
     /// Pop one value off the stack
     fn pop_stack(&mut self, memory: &mut dyn Memory) -> Result<u32, Error> {
         let value = memory.load_u32(self.sp)?;
-        eprintln!("Popping {:08x} from {:08x}", value, self.sp);
         self.store_reg(Register::Sp, self.sp + 4);
         Ok(value)
     }
@@ -3541,6 +3608,24 @@ mod test {
     }
 
     #[test]
+    fn add_sp_reg_instruction() {
+        let i = Armv6M::decode(0b0100010010001101);
+        assert_eq!(Ok(Instruction::AddSpReg { rm: Register::R1 }), i);
+        assert_eq!("ADD SP,R1", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn add_sp_reg_operation() {
+        let sp = 32;
+        let mut cpu = Armv6M::new(sp, 0x0);
+        let mut ram = [15; 8];
+        cpu.regs[1] = 4;
+        cpu.execute(Instruction::AddSpReg { rm: Register::R1 }, &mut ram)
+            .unwrap();
+        assert_eq!(36, cpu.sp);
+    }
+
+    #[test]
     fn sub_sp_imm_instruction() {
         let i = Armv6M::decode(0b1011000010010000);
         assert_eq!(Ok(Instruction::SubSpImm { imm7x4: 64 }), i);
@@ -3882,6 +3967,41 @@ mod test {
         )
         .unwrap();
         assert_eq!(0x12345677, cpu.regs[0]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+    #[test]
+    fn sbcs_reg_instruction() {
+        let i = Armv6M::decode(0b0100000110001000);
+        assert_eq!(
+            Ok(Instruction::SbcsReg {
+                rdn: Register::R0,
+                rm: Register::R1,
+            }),
+            i
+        );
+        assert_eq!("SBCS R0,R1", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn sbcs_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.set_c(false);
+        cpu.regs[0] = 0x12345678;
+        cpu.regs[2] = 1;
+        cpu.execute(
+            Instruction::SbcsReg {
+                rdn: Register::R0,
+                rm: Register::R2,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x12345676, cpu.regs[0]);
         assert!(!cpu.is_n());
         assert!(!cpu.is_z());
         assert!(cpu.is_c());

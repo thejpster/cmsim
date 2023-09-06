@@ -57,7 +57,6 @@ impl cmsim::Memory for Uart {
     }
 
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), cmsim::Error> {
-        eprintln!("UART register {}", addr);
         match addr {
             0 => {
                 let mut out = std::io::stdout();
@@ -125,18 +124,21 @@ fn main() {
         system.flash.store_u8(idx as u32, *b).unwrap();
     }
 
+    let log_file = std::fs::File::create("run.log").expect("make log file");
+    let mut buf_out = std::io::BufWriter::new(log_file);
+
     let sp = system.flash.load_u32(0).unwrap();
     let reset = system.flash.load_u32(4).unwrap();
-    eprintln!("SP is 0x{:08x}, Reset is 0x{:08x}", sp, reset);
+    writeln!(buf_out, "SP is 0x{:08x}, Reset is 0x{:08x}", sp, reset).unwrap();
     let mut cpu = cmsim::Armv6M::new(sp, reset);
 
     let mut steps = 0;
     loop {
         cpu.step(&mut system).unwrap();
         steps += 1;
-        eprintln!("Steps {}, CPU:\n{:08x?}", steps, cpu);
+        writeln!(buf_out, "Steps {}, CPU:\n{:08x?}", steps, cpu).unwrap();
         if let Some(arg) = cpu.breakpoint() {
-            eprintln!("Got breakpoint 0x{:02X}", arg);
+            writeln!(buf_out, "Got breakpoint 0x{:02X}", arg).unwrap();
             if arg == 0xAB {
                 // Semihosting
                 let op_num = cpu.register(cmsim::Register::R0);
@@ -144,7 +146,7 @@ fn main() {
                 match op_num {
                     0x18 => {
                         // SYS_EXIT
-                        eprintln!("SYS_EXIT...");
+                        writeln!(buf_out, "SYS_EXIT...").unwrap();
                         std::process::exit(0);
                     }
                     _ => {
