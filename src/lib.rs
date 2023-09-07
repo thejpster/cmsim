@@ -6,6 +6,8 @@
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
 
+use tracing::debug;
+
 /// All the ways we can fail to execute code
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -210,15 +212,10 @@ impl From<u8> for Condition {
 /// All the ARMv6-M supported instructions
 ///
 /// TODO:
-/// * asrs
-/// * eors
-/// * muls
 /// * nop
-/// * sbcs
 /// * sxtb
 /// * tst
 /// * udf
-/// * uxth
 /// * wfi
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
@@ -601,6 +598,15 @@ pub enum Instruction {
         /// The register containing the value to add to SP
         rm: Register,
     },
+    /// Add, Register plus Stack Pointer.
+    ///
+    /// Increments a register value by the Stack Pointer value.
+    ///
+    /// `ADD <Rdm>,SP`
+    AddRegSp {
+        /// The register to be incremented by the value in SP
+        rdm: Register,
+    },
     /// Subtract, Stack Pointer minus Immediate.
     ///
     /// Decrements the Stack Pointer by an immediate value.
@@ -829,6 +835,44 @@ pub enum Instruction {
         /// The register that contains the second operand
         rm: Register,
     },
+    /// Arithmetic Shift Right with Set (Immediate)
+    ///
+    /// Shift a register value right by some immediate number of bits, shifting
+    /// in copies of the sign bit, and write the result to the destination
+    /// register.
+    ///
+    /// `ASRS <Rd>,<Rm>,#imm5
+    AsrsImm {
+        /// The destination register
+        rd: Register,
+        /// The register that contains the first operand.
+        rm: Register,
+        /// The second operand
+        imm5: u8,
+    },
+    /// Multiply with Set (Register).
+    ///
+    /// Multiply two register values. Condition flags are updated.
+    ///
+    /// `MULS <Rdn>,<Rm>
+    Muls {
+        /// The register that contains the first operand, and the destination
+        rdn: Register,
+        /// The register that contains the second operand
+        rm: Register,
+    },
+    /// Unsigned Extend Halfword.
+    ///
+    /// Read 16 bits from one register, zero-extend to 32-bits, and write to the
+    /// destination register.
+    ///
+    /// `UXTH <Rd>,<Rm>`
+    Uxth {
+        /// The destination register
+        rd: Register,
+        /// The register to read the 16-bit value from
+        rm: Register,
+    },
     /// Unsigned Extend Byte.
     ///
     /// Read 8 bits from one register, zero-extend to 32-bits, and write to the
@@ -887,6 +931,18 @@ pub enum Instruction {
     ///
     /// `ORRS <Rdn>,<Rm>`
     OrrsReg {
+        /// The register that contains the first operand, and the destination
+        rdn: Register,
+        /// The register that contains the second operand
+        rm: Register,
+    },
+    /// Bitwise XOR, and Set (Register)
+    ///
+    /// Computes the bitwise OR of two register values. Condition flags are
+    /// updated.
+    ///
+    /// `EORS <Rdn>,<Rm>`
+    EorsReg {
         /// The register that contains the first operand, and the destination
         rdn: Register,
         /// The register that contains the second operand
@@ -1072,6 +1128,9 @@ impl std::fmt::Display for Instruction {
             Instruction::AddSpReg { rm } => {
                 write!(f, "ADD SP,{rm}")
             }
+            Instruction::AddRegSp { rdm } => {
+                write!(f, "ADD {rdm},SP")
+            }
             Instruction::SubSpImm { imm7x4 } => {
                 write!(f, "SUB SP,#{imm7x4}",)
             }
@@ -1127,6 +1186,15 @@ impl std::fmt::Display for Instruction {
             Instruction::LsrsReg { rdn, rm } => {
                 write!(f, "LSRS {rdn},{rm}")
             }
+            Instruction::AsrsImm { rd, rm, imm5 } => {
+                write!(f, "ASRS {rd},{rm},#{imm5}")
+            }
+            Instruction::Muls { rdn, rm } => {
+                write!(f, "MULS {rdn},{rm},{rdn}")
+            }
+            Instruction::Uxth { rd, rm } => {
+                write!(f, "UXTH {rd},{rm}")
+            }
             Instruction::Uxtb { rd, rm } => {
                 write!(f, "UXTB {rd},{rm}")
             }
@@ -1141,6 +1209,9 @@ impl std::fmt::Display for Instruction {
             }
             Instruction::OrrsReg { rdn, rm } => {
                 write!(f, "ORRS {rdn},{rm}")
+            }
+            Instruction::EorsReg { rdn, rm } => {
+                write!(f, "EORS {rdn},{rm}")
             }
             Instruction::BicsReg { rdn, rm } => {
                 write!(f, "BICS {rdn},{rm}")
@@ -1520,6 +1591,18 @@ impl Armv6M {
                 rm: Register::from(rm),
                 imm5,
             })
+        } else if (word >> 11) == 0b00010 {
+            let mut imm5 = ((word >> 6) & 0x1F) as u8;
+            if imm5 == 0 {
+                imm5 = 32;
+            }
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::AsrsImm {
+                rd: Register::from(rd),
+                rm: Register::from(rm),
+                imm5,
+            })
         } else if (word >> 11) == 0b00101 {
             let imm8 = (word & 0xFF) as u8;
             let rn = ((word >> 8) & 0b111) as u8;
@@ -1671,6 +1754,12 @@ impl Armv6M {
         } else if (word >> 8) == 0b10111110 {
             let imm8 = (word & 0xFF) as u8;
             Ok(Instruction::Breakpoint { imm8 })
+        } else if (word >> 8) == 0b01000100 && ((word >> 3) & 0b1111) == 0b1101 {
+            let dm = (word >> 7) & 1;
+            let rdm = ((dm << 4) | (word & 0b111)) as u8;
+            Ok(Instruction::AddRegSp {
+                rdm: Register::from(rdm),
+            })
         } else if (word >> 8) == 0b01000110 {
             let d: u8 = ((word >> 7) & 0b1) as u8;
             let rd = (d << 3) | (word & 0b111) as u8;
@@ -1718,6 +1807,20 @@ impl Armv6M {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
+        } else if (word >> 6) == 0b0100001101 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rdn = (word & 0b111) as u8;
+            Ok(Instruction::Muls {
+                rdn: Register::from(rdn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 6) == 0b1011001010 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rd = (word & 0b111) as u8;
+            Ok(Instruction::Uxth {
+                rd: Register::from(rd),
+                rm: Register::from(rm),
+            })
         } else if (word >> 6) == 0b1011001011 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1743,6 +1846,13 @@ impl Armv6M {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::OrrsReg {
+                rdn: Register::from(rdn),
+                rm: Register::from(rm),
+            })
+        } else if (word >> 6) == 0b0100000001 {
+            let rm = ((word >> 3) & 0b111) as u8;
+            let rdn = (word & 0b111) as u8;
+            Ok(Instruction::EorsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
@@ -1835,6 +1945,7 @@ impl Armv6M {
         instruction: Instruction,
         memory: &mut dyn Memory,
     ) -> Result<(), Error> {
+        debug!("Executing '{}' @ {:08x}", instruction, self.pc);
         self.breakpoint = None;
         self.pc = self.pc.wrapping_add(2);
         match instruction {
@@ -2058,6 +2169,10 @@ impl Armv6M {
                 let offset = self.fetch_reg(rm);
                 self.sp = self.sp.wrapping_add(offset);
             }
+            Instruction::AddRegSp { rdm } => {
+                let value = self.fetch_reg(rdm);
+                self.store_reg(rdm, value.wrapping_add(self.sp));
+            }
             Instruction::SubSpImm { imm7x4 } => {
                 // This does a subtraction
                 let value = self.sp.wrapping_add(!imm7x4).wrapping_add(1);
@@ -2224,6 +2339,28 @@ impl Armv6M {
                 self.set_z(result == 0);
                 self.set_c(carry_out);
             }
+            Instruction::AsrsImm { rd, rm, imm5 } => {
+                let value = self.fetch_reg(rm) as i32;
+                let shift_n = u32::from(imm5);
+                let result = value >> shift_n;
+                let carry_out = (value & (1 << (shift_n - 1))) != 0;
+                self.store_reg(rd, result as u32);
+                self.set_n(result < 0);
+                self.set_z(result == 0);
+                self.set_c(carry_out);
+            }
+            Instruction::Muls { rdn, rm } => {
+                let value1 = self.fetch_reg(rdn);
+                let value2 = self.fetch_reg(rm);
+                let result = value1.wrapping_mul(value2);
+                self.store_reg(rdn, result);
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+            }
+            Instruction::Uxth { rd, rm } => {
+                let value = self.fetch_reg(rm) & 0xFFFF;
+                self.store_reg(rd, value);
+            }
             Instruction::Uxtb { rd, rm } => {
                 let value = self.fetch_reg(rm) & 0xFF;
                 self.store_reg(rd, value);
@@ -2261,6 +2398,14 @@ impl Armv6M {
                 let value_m = self.fetch_reg(rm);
                 let value_n = self.fetch_reg(rdn);
                 let result = value_n | value_m;
+                self.set_n(result >= 0x8000_0000);
+                self.set_z(result == 0);
+                self.store_reg(rdn, result);
+            }
+            Instruction::EorsReg { rdn, rm } => {
+                let value_m = self.fetch_reg(rm);
+                let value_n = self.fetch_reg(rdn);
+                let result = value_n ^ value_m;
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
                 self.store_reg(rdn, result);
@@ -3626,6 +3771,24 @@ mod test {
     }
 
     #[test]
+    fn add_reg_sp_instruction() {
+        let i = Armv6M::decode(0b0100010001101001);
+        assert_eq!(Ok(Instruction::AddRegSp { rdm: Register::R1 }), i);
+        assert_eq!("ADD R1,SP", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn add_reg_sp_operation() {
+        let sp = 32;
+        let mut cpu = Armv6M::new(sp, 0x0);
+        let mut ram = [15; 8];
+        cpu.regs[1] = 4;
+        cpu.execute(Instruction::AddRegSp { rdm: Register::R1 }, &mut ram)
+            .unwrap();
+        assert_eq!(36, cpu.regs[1]);
+    }
+
+    #[test]
     fn sub_sp_imm_instruction() {
         let i = Armv6M::decode(0b1011000010010000);
         assert_eq!(Ok(Instruction::SubSpImm { imm7x4: 64 }), i);
@@ -4187,6 +4350,101 @@ mod test {
         assert!(!cpu.is_v());
     }
     #[test]
+    fn asrs_imm_instruction() {
+        let i = Armv6M::decode(0b0001000010000001);
+        assert_eq!(
+            Ok(Instruction::AsrsImm {
+                rd: Register::R1,
+                rm: Register::R0,
+                imm5: 2
+            }),
+            i
+        );
+        assert_eq!("ASRS R1,R0,#2", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn asrs_imm_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram: [u32; 8] = [0; 8];
+        cpu.regs[1] = 0xF1234567;
+        cpu.execute(
+            Instruction::AsrsImm {
+                rd: Register::R0,
+                rm: Register::R1,
+                imm5: 4,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0xFF123456, cpu.regs[0]);
+        assert!(cpu.is_n());
+        assert!(!cpu.is_z());
+        assert!(!cpu.is_c());
+        assert!(!cpu.is_v());
+    }
+
+    #[test]
+    fn muls_instruction() {
+        let i = Armv6M::decode(0b0100001101011100);
+        assert_eq!(
+            Ok(Instruction::Muls {
+                rdn: Register::R4,
+                rm: Register::R3,
+            }),
+            i
+        );
+        assert_eq!("MULS R4,R3,R4", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn muls_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram: [u32; 8] = [0; 8];
+        cpu.regs[4] = 5;
+        cpu.regs[3] = 4;
+        cpu.execute(
+            Instruction::Muls {
+                rdn: Register::R4,
+                rm: Register::R3,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(20, cpu.regs[4]);
+        assert!(!cpu.is_n());
+        assert!(!cpu.is_z());
+    }
+    #[test]
+    fn uxth_instruction() {
+        let i = Armv6M::decode(0b1011001010001001);
+        assert_eq!(
+            Ok(Instruction::Uxth {
+                rd: Register::R1,
+                rm: Register::R1,
+            }),
+            i
+        );
+        assert_eq!("UXTH R1,R1", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn uxth_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram: [u32; 8] = [0; 8];
+        cpu.regs[4] = 0x12345678;
+        cpu.execute(
+            Instruction::Uxth {
+                rd: Register::R4,
+                rm: Register::R4,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(0x5678, cpu.regs[4]);
+    }
+    #[test]
     fn uxtb_instruction() {
         let i = Armv6M::decode(0b1011001011001001);
         assert_eq!(
@@ -4434,6 +4692,36 @@ mod test {
         )
         .unwrap();
         assert_eq!(cpu.regs[6], 0xFF3456FF);
+    }
+
+    #[test]
+    fn eors_reg_instruction() {
+        let i = Armv6M::decode(0b0100000001011110);
+        assert_eq!(
+            Ok(Instruction::EorsReg {
+                rdn: Register::R6,
+                rm: Register::R3,
+            }),
+            i
+        );
+        assert_eq!("EORS R6,R3", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn eors_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[6] = 0x12345678;
+        cpu.regs[3] = 0xFF0000FF;
+        cpu.execute(
+            Instruction::EorsReg {
+                rdn: Register::R6,
+                rm: Register::R3,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(cpu.regs[6], 0xED345687);
     }
     #[test]
     fn bics_reg_instruction() {

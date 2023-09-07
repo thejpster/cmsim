@@ -6,6 +6,7 @@
 //! 1024 KiB of ROM at 0x0000_0000 and 1024 KiB of SRAM at 0x2000_0000 are simulated.
 
 use std::io::prelude::*;
+use tracing::{error, info};
 
 use cmsim::Memory;
 
@@ -44,11 +45,47 @@ impl cmsim::Memory for Uart {
         match addr {
             0 => {
                 // Data in
-                Ok(0)
+                if let crossterm::event::Event::Key(k) = crossterm::event::read().unwrap() {
+                    match k.code {
+                        crossterm::event::KeyCode::Backspace => todo!(),
+                        crossterm::event::KeyCode::Enter => todo!(),
+                        crossterm::event::KeyCode::Left => todo!(),
+                        crossterm::event::KeyCode::Right => todo!(),
+                        crossterm::event::KeyCode::Up => todo!(),
+                        crossterm::event::KeyCode::Down => todo!(),
+                        crossterm::event::KeyCode::Home => todo!(),
+                        crossterm::event::KeyCode::End => todo!(),
+                        crossterm::event::KeyCode::PageUp => todo!(),
+                        crossterm::event::KeyCode::PageDown => todo!(),
+                        crossterm::event::KeyCode::Tab => todo!(),
+                        crossterm::event::KeyCode::BackTab => todo!(),
+                        crossterm::event::KeyCode::Delete => todo!(),
+                        crossterm::event::KeyCode::Insert => todo!(),
+                        crossterm::event::KeyCode::F(_) => todo!(),
+                        crossterm::event::KeyCode::Char(x) => Ok(x as u32),
+                        crossterm::event::KeyCode::Null => todo!(),
+                        crossterm::event::KeyCode::Esc => todo!(),
+                        crossterm::event::KeyCode::CapsLock => todo!(),
+                        crossterm::event::KeyCode::ScrollLock => todo!(),
+                        crossterm::event::KeyCode::NumLock => todo!(),
+                        crossterm::event::KeyCode::PrintScreen => todo!(),
+                        crossterm::event::KeyCode::Pause => todo!(),
+                        crossterm::event::KeyCode::Menu => todo!(),
+                        crossterm::event::KeyCode::KeypadBegin => todo!(),
+                        crossterm::event::KeyCode::Media(_) => todo!(),
+                        crossterm::event::KeyCode::Modifier(_) => todo!(),
+                    }
+                } else {
+                    Ok(0)
+                }
             }
             4 => {
                 // Status
-                Ok(0)
+                if crossterm::event::poll(std::time::Duration::from_micros(10)).unwrap() {
+                    Ok(2)
+                } else {
+                    Ok(0)
+                }
             }
             8 => Ok(self.control),
             16 => Ok(self.baud),
@@ -61,6 +98,7 @@ impl cmsim::Memory for Uart {
             0 => {
                 let mut out = std::io::stdout();
                 out.write_all(&[value as u8]).unwrap();
+                out.flush().unwrap();
             }
             8 => self.control = value,
             16 => self.baud = value,
@@ -104,6 +142,14 @@ impl cmsim::Memory for System {
 }
 
 fn main() {
+    // We need raw more for the UART emulation
+    crossterm::terminal::enable_raw_mode().unwrap();
+
+    tracing_subscriber::fmt::fmt()
+        .with_writer(std::io::stderr)
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+
     let binary_name = std::env::args().nth(1).unwrap();
     let contents = std::fs::read(binary_name).unwrap();
 
@@ -124,21 +170,37 @@ fn main() {
         system.flash.store_u8(idx as u32, *b).unwrap();
     }
 
-    let log_file = std::fs::File::create("run.log").expect("make log file");
-    let mut buf_out = std::io::BufWriter::new(log_file);
-
     let sp = system.flash.load_u32(0).unwrap();
     let reset = system.flash.load_u32(4).unwrap();
-    writeln!(buf_out, "SP is 0x{:08x}, Reset is 0x{:08x}", sp, reset).unwrap();
+    info!("SP is 0x{:08x}, Reset is 0x{:08x}", sp, reset);
     let mut cpu = cmsim::Armv6M::new(sp, reset);
 
     let mut steps = 0;
     loop {
-        cpu.step(&mut system).unwrap();
+        if let Err(e) = cpu.step(&mut system) {
+            match e {
+                cmsim::Error::InvalidAddress(a) => error!("Invalid address {a:#08x}"),
+                cmsim::Error::InvalidInstruction(i) => error!(
+                    "Invalid opcode {:#04x} @ {:#08x}",
+                    i,
+                    cpu.register(cmsim::Register::Pc)
+                ),
+                cmsim::Error::InvalidInstruction32(i1, i2) => error!(
+                    "Invalid opcode {:#04x}{:04x} @ {:#08x}",
+                    i1,
+                    i2,
+                    cpu.register(cmsim::Register::Pc)
+                ),
+                cmsim::Error::UnalignedAccess => error!("Unaligned access"),
+                cmsim::Error::WideInstruction => unreachable!(),
+                cmsim::Error::UnknownSpecialRegister(r) => error!("Unknown special register {}", r),
+            }
+            break;
+        }
         steps += 1;
-        writeln!(buf_out, "Steps {}, CPU:\n{:08x?}", steps, cpu).unwrap();
+        info!("Steps {}, CPU:\n{:08x?}", steps, cpu);
         if let Some(arg) = cpu.breakpoint() {
-            writeln!(buf_out, "Got breakpoint 0x{:02X}", arg).unwrap();
+            info!("Got breakpoint 0x{:02X}", arg);
             if arg == 0xAB {
                 // Semihosting
                 let op_num = cpu.register(cmsim::Register::R0);
@@ -146,7 +208,7 @@ fn main() {
                 match op_num {
                     0x18 => {
                         // SYS_EXIT
-                        writeln!(buf_out, "SYS_EXIT...").unwrap();
+                        info!("SYS_EXIT...");
                         std::process::exit(0);
                     }
                     _ => {
