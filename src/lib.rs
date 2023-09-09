@@ -432,7 +432,7 @@ pub enum Instruction {
     /// value and load a word from memory at that address into a destination
     /// register.
     ///
-    /// LDR <Rt>,[<Rn>, <Rm}]
+    /// LDR <Rt>,[<Rn>, <Rm>]
     LdrReg {
         /// The register to load into
         rt: Register,
