@@ -15,6 +15,13 @@ A sample assembly language program is included as [`sample.S`](./sample.S). You 
 cargo run -- ./target/sample.bin
 ```
 
+You need to connect to port `127.0.0.1:8000` before the program will run. This
+port is for any data received/sent on UART0.
+
+```console
+$ nc localhost 8000
+```
+
 ## Changelog
 
 See [CHANGELOG.md](./CHANGELOG.md)
