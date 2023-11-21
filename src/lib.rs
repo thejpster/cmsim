@@ -30,6 +30,14 @@ pub enum Error {
 /// 16-bit and 8-bit operations are done with a read, modify, write on the
 /// appropriate 32-bit word. Unaligned accesses are rejected.
 pub trait Memory {
+    /// Returns how many valid byte addresses in this memory region
+    fn len(&self) -> u32;
+
+    /// Is this region of zero length?
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Fetch a 32-bit value from memory at the given address.
     ///
     /// Gives an error if the address is out-of-bounds or not aligned.
@@ -123,6 +131,11 @@ impl<const N: usize> Memory for [u32; N] {
             .get_mut(addr as usize >> 2)
             .ok_or(Error::InvalidAddress(addr))? = value;
         Ok(())
+    }
+
+    fn len(&self) -> u32 {
+        let slice = self.as_slice();
+        std::mem::size_of_val(slice) as u32
     }
 }
 
