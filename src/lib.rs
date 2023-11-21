@@ -225,7 +225,6 @@ impl From<u8> for Condition {
 /// All the ARMv6-M supported instructions
 ///
 /// TODO:
-/// * nop
 /// * sxtb
 /// * tst
 /// * udf
@@ -1038,6 +1037,15 @@ pub enum Instruction {
     ///
     /// `DMB`
     Dmb,
+    /// Supervisor Call.
+    ///
+    /// Raise a software interrupt with the given number.
+    ///
+    /// `SVC <imm8>`
+    SupervisorCall {
+        /// The 8-bit signed immediate value
+        imm8: u8,
+    },
 }
 
 impl std::fmt::Display for Instruction {
@@ -1247,6 +1255,9 @@ impl std::fmt::Display for Instruction {
             Instruction::Dmb => {
                 write!(f, "DMB")
             }
+            Instruction::SupervisorCall { imm8 } => {
+                write!(f, "SVC 0x{imm8:02x}")
+            }
         }
     }
 }
@@ -1400,6 +1411,7 @@ pub struct Armv6M {
     lr: u32,
     pc: u32,
     breakpoint: Option<u8>,
+    supervisor: Option<u8>,
     aspr: u32,
     mode: Mode,
     primask: u32,
@@ -1473,63 +1485,67 @@ impl Armv6M {
     /// Some instructions are made up of two 16-bit values - you will get
     /// `Error::WideInstruction` if you try and decode half of one.
     pub fn decode(word: u16) -> Result<Instruction, Error> {
-        if (word >> 12) == 0b1101 {
+        if topbits(word, 4) == 0b1101 {
             let cond = ((word >> 8) & 0b1111) as u8;
             let imm8 = word as u8;
-            Ok(Instruction::BranchConditional {
-                cond: Condition::from(cond),
-                imm8x2: Self::sign_extend_imm8(imm8) << 1,
-            })
-        } else if (word >> 11) == 0b11110 {
+            if cond == 0b1111 {
+                Ok(Instruction::SupervisorCall { imm8 })
+            } else {
+                Ok(Instruction::BranchConditional {
+                    cond: Condition::from(cond),
+                    imm8x2: Self::sign_extend_imm8(imm8) << 1,
+                })
+            }
+        } else if topbits(word, 5) == 0b1_1110 {
             // This is a 32-bit BL <label>
             Err(Error::WideInstruction)
-        } else if (word >> 11) == 0b10010 {
+        } else if topbits(word, 5) == 0b1_0010 {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::StrSpImm {
                 rt: Register::from(rt),
                 imm8x4: u16::from(imm8) << 2,
             })
-        } else if (word >> 11) == 0b10011 {
+        } else if topbits(word, 5) == 0b1_0011 {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::LdrSpImm {
                 rt: Register::from(rt),
                 imm8x4: u16::from(imm8) << 2,
             })
-        } else if (word >> 11) == 0b00100 {
+        } else if topbits(word, 5) == 0b0_0100 {
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::MovsImm {
                 rd: Register::from(rd),
                 imm8,
             })
-        } else if (word >> 11) == 0b11100 {
+        } else if topbits(word, 5) == 0b1_1100 {
             Ok(Instruction::Branch {
                 imm11x2: Self::sign_extend_imm11(word & 0x7FF) << 1,
             })
-        } else if (word >> 11) == 0b10101 {
+        } else if topbits(word, 5) == 0b1_0101 {
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::AddSpImmReg {
                 rd: Register::from(rd),
                 imm8x4: u16::from(imm8) << 2,
             })
-        } else if (word >> 11) == 0b00111 {
+        } else if topbits(word, 5) == 0b0_0111 {
             let imm8 = (word & 0xFF) as u8;
             let rdn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::SubsImm8 {
                 rdn: Register::from(rdn),
                 imm8,
             })
-        } else if (word >> 11) == 0b01001 {
+        } else if topbits(word, 5) == 0b0_1001 {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::LdrLiteral {
                 rt: Register::from(rt),
                 imm8x4: u16::from(imm8) << 2,
             })
-        } else if (word >> 11) == 0b01101 {
+        } else if topbits(word, 5) == 0b0_1101 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1538,7 +1554,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5x4: imm5 << 2,
             })
-        } else if (word >> 11) == 0b01100 {
+        } else if topbits(word, 5) == 0b0_1100 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1547,7 +1563,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5x4: imm5 << 2,
             })
-        } else if (word >> 11) == 0b10001 {
+        } else if topbits(word, 5) == 0b1_0001 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1556,7 +1572,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5x2: imm5 << 1,
             })
-        } else if (word >> 11) == 0b10000 {
+        } else if topbits(word, 5) == 0b1_0000 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1565,7 +1581,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5x2: imm5 << 1,
             })
-        } else if (word >> 11) == 0b01111 {
+        } else if topbits(word, 5) == 0b0_1111 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1574,7 +1590,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5,
             })
-        } else if (word >> 11) == 0b01110 {
+        } else if topbits(word, 5) == 0b0_1110 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1583,7 +1599,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5,
             })
-        } else if (word >> 11) == 0b00000 {
+        } else if topbits(word, 5) == 0b0_0000 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1592,7 +1608,7 @@ impl Armv6M {
                 rm: Register::from(rm),
                 imm5,
             })
-        } else if (word >> 11) == 0b00001 {
+        } else if topbits(word, 5) == 0b0_0001 {
             let mut imm5 = ((word >> 6) & 0x1F) as u8;
             if imm5 == 0 {
                 imm5 = 32;
@@ -1604,7 +1620,7 @@ impl Armv6M {
                 rm: Register::from(rm),
                 imm5,
             })
-        } else if (word >> 11) == 0b00010 {
+        } else if topbits(word, 5) == 0b0_0010 {
             let mut imm5 = ((word >> 6) & 0x1F) as u8;
             if imm5 == 0 {
                 imm5 = 32;
@@ -1616,56 +1632,56 @@ impl Armv6M {
                 rm: Register::from(rm),
                 imm5,
             })
-        } else if (word >> 11) == 0b00101 {
+        } else if topbits(word, 5) == 0b0_0101 {
             let imm8 = (word & 0xFF) as u8;
             let rn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::CmpImm {
                 rn: Register::from(rn),
                 imm8,
             })
-        } else if (word >> 11) == 0b00110 {
+        } else if topbits(word, 5) == 0b0_0110 {
             let imm8 = (word & 0xFF) as u8;
             let rdn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::AddsImm8 {
                 rdn: Register::from(rdn),
                 imm8,
             })
-        } else if (word >> 11) == 0b11000 {
+        } else if topbits(word, 5) == 0b1_1000 {
             let register_list = (word & 0xFF) as u8;
             let rn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::Stmia {
                 rn: Register::from(rn),
                 register_list: RegisterList::new(register_list),
             })
-        } else if (word >> 11) == 0b11001 {
+        } else if topbits(word, 5) == 0b1_1001 {
             let register_list = (word & 0xFF) as u8;
             let rn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::Ldmia {
                 rn: Register::from(rn),
                 register_list: RegisterList::new(register_list),
             })
-        } else if (word >> 11) == 0b10100 {
+        } else if topbits(word, 5) == 0b1_0100 {
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::Adr {
                 rd: Register::from(rd),
                 imm8x4: u16::from(imm8) << 2,
             })
-        } else if (word >> 9) == 0b1011010 {
+        } else if topbits(word, 7) == 0b101_1010 {
             let m = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
             Ok(Instruction::Push {
                 register_list: RegisterList::new(register_list),
                 m,
             })
-        } else if (word >> 9) == 0b1011110 {
+        } else if topbits(word, 7) == 0b101_1110 {
             let p = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
             Ok(Instruction::Pop {
                 register_list: RegisterList::new(register_list),
                 p,
             })
-        } else if (word >> 9) == 0b0001110 {
+        } else if topbits(word, 7) == 0b000_1110 {
             let imm3 = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1674,7 +1690,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm3,
             })
-        } else if (word >> 9) == 0b0001100 {
+        } else if topbits(word, 7) == 0b000_1100 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1683,7 +1699,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0001111 {
+        } else if topbits(word, 7) == 0b000_1111 {
             let imm3 = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1692,7 +1708,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm3,
             })
-        } else if (word >> 9) == 0b0001101 {
+        } else if topbits(word, 7) == 0b000_1101 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1701,7 +1717,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101000 {
+        } else if topbits(word, 7) == 0b010_1000 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1710,7 +1726,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101001 {
+        } else if topbits(word, 7) == 0b010_1001 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1719,7 +1735,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101010 {
+        } else if topbits(word, 7) == 0b010_1010 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1728,7 +1744,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101100 {
+        } else if topbits(word, 7) == 0b010_1100 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1737,7 +1753,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101101 {
+        } else if topbits(word, 7) == 0b010_1101 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1746,7 +1762,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101110 {
+        } else if topbits(word, 7) == 0b010_1110 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1755,7 +1771,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101011 {
+        } else if topbits(word, 7) == 0b010_1011 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1764,16 +1780,16 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 8) == 0b10111110 {
+        } else if topbits(word, 8) == 0b1011_1110 {
             let imm8 = (word & 0xFF) as u8;
             Ok(Instruction::Breakpoint { imm8 })
-        } else if (word >> 8) == 0b01000100 && ((word >> 3) & 0b1111) == 0b1101 {
+        } else if topbits(word, 8) == 0b0100_0100 && ((word >> 3) & 0b1111) == 0b1101 {
             let dm = (word >> 7) & 1;
             let rdm = ((dm << 4) | (word & 0b111)) as u8;
             Ok(Instruction::AddRegSp {
                 rdm: Register::from(rdm),
             })
-        } else if (word >> 8) == 0b01000110 {
+        } else if topbits(word, 8) == 0b0100_0110 {
             let d: u8 = ((word >> 7) & 0b1) as u8;
             let rd = (d << 3) | (word & 0b111) as u8;
             let rm: u8 = ((word >> 3) & 0b1111) as u8;
@@ -1781,130 +1797,130 @@ impl Armv6M {
                 rm: Register::from(rm),
                 rd: Register::from(rd),
             })
-        } else if (word >> 7) == 0b010001110 {
+        } else if topbits(word, 9) == 0b0_1000_1110 {
             let rm = ((word >> 3) & 0b1111) as u8;
             Ok(Instruction::BranchExchange {
                 rm: Register::from(rm),
             })
-        } else if (word >> 7) == 0b010001111 {
+        } else if topbits(word, 9) == 0b0_1000_1111 {
             let rm = ((word >> 3) & 0b1111) as u8;
             Ok(Instruction::BranchLinkExchange {
                 rm: Register::from(rm),
             })
-        } else if (word >> 7) == 0b101100000 {
+        } else if topbits(word, 9) == 0b1_0110_0000 {
             let imm7 = (word & 0x7F) as u8;
             Ok(Instruction::AddSpImm {
                 imm7x4: u32::from(imm7) << 2,
             })
-        } else if (word >> 7) == 0b101100001 {
+        } else if topbits(word, 9) == 0b1_0110_0001 {
             let imm7 = (word & 0x7F) as u8;
             Ok(Instruction::SubSpImm {
                 imm7x4: u32::from(imm7) << 2,
             })
-        } else if (word >> 7) == 0b010001001 && (word & 0b111) == 0b101 {
+        } else if topbits(word, 9) == 0b0_1000_1001 && (word & 0b111) == 0b101 {
             let rm: u8 = ((word >> 3) & 0b1111) as u8;
             Ok(Instruction::AddSpReg {
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100000010 {
+        } else if topbits(word, 10) == 0b01_0000_0010 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::LslsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100000011 {
+        } else if topbits(word, 10) == 0b01_0000_0011 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::LsrsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001101 {
+        } else if topbits(word, 10) == 0b01_0000_1101 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::Muls {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b1011001010 {
+        } else if topbits(word, 10) == 0b10_1100_1010 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
             Ok(Instruction::Uxth {
                 rd: Register::from(rd),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b1011001011 {
+        } else if topbits(word, 10) == 0b10_1100_1011 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
             Ok(Instruction::Uxtb {
                 rd: Register::from(rd),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001010 {
+        } else if topbits(word, 10) == 0b01_0000_1010 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rn = (word & 0b111) as u8;
             Ok(Instruction::CmpReg {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100000000 {
+        } else if topbits(word, 10) == 0b01_0000_0000 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::AndsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001100 {
+        } else if topbits(word, 10) == 0b01_0000_1100 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::OrrsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100000001 {
+        } else if topbits(word, 10) == 0b01_0000_0001 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::EorsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001110 {
+        } else if topbits(word, 10) == 0b01_0000_1110 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::BicsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001111 {
+        } else if topbits(word, 10) == 0b01_0000_1111 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
             Ok(Instruction::MvnsReg {
                 rd: Register::from(rd),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001001 {
+        } else if topbits(word, 10) == 0b01_0000_1001 {
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
             Ok(Instruction::RsbImm {
                 rd: Register::from(rd),
                 rn: Register::from(rn),
             })
-        } else if (word >> 6) == 0b0100000101 {
+        } else if topbits(word, 10) == 0b01_0000_0101 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::AdcsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100000110 {
+        } else if topbits(word, 10) == 0b01_0000_0110 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::SbcsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 5) == 0b10110110011 {
+        } else if topbits(word, 11) == 0b101_1011_0011 {
             let im = ((word >> 4) & 1) != 0;
             Ok(Instruction::Cps { im })
         } else {
@@ -1914,7 +1930,7 @@ impl Armv6M {
 
     /// Decode a 32-bit T2 instruction from two 16-bit words.
     pub fn decode32(word1: u16, word2: u16) -> Result<Instruction, Error> {
-        if (word1 >> 11) == 0b11110 && (word2 >> 14) == 0b11 {
+        if topbits(word1, 5) == 0b1_1110 && topbits(word2, 2) == 0b11 {
             // Branch with Link
             // See ARMv6-M Architecture Rference Manual A6.7.13
             let s_imm10 = u32::from(word1 & 0x7FF);
@@ -1931,21 +1947,21 @@ impl Armv6M {
             Ok(Instruction::BranchLink {
                 imm24: imm24 as i32,
             })
-        } else if (word1 == 0b1111001111101111) && (word2 >> 12) == 0b1000 {
+        } else if (word1 == 0b1111001111101111) && topbits(word2, 4) == 0b1000 {
             let sys_m = (word2 & 0xFF) as u8;
             let rd = ((word2 >> 8) & 0b1111) as u8;
             Ok(Instruction::Mrs {
                 rd: Register::from(rd),
                 sys_m,
             })
-        } else if (word1 >> 4) == 0b111100111000 && (word2 >> 8) == 0b10001000 {
+        } else if topbits(word1, 12) == 0b1111_0011_1000 && topbits(word2, 8) == 0b1000_1000 {
             let sys_m = (word2 & 0xFF) as u8;
             let rn = (word1 & 0b1111) as u8;
             Ok(Instruction::Msr {
                 rn: Register::from(rn),
                 sys_m,
             })
-        } else if (word1 >> 4) == 0b111100111011 && (word2 >> 4) == 0b100011110101 {
+        } else if topbits(word1, 12) == 0b1111_0011_1011 && topbits(word2, 12) == 0b1000_1111_0101 {
             Ok(Instruction::Dmb)
         } else {
             Err(Error::InvalidInstruction32(word1, word2))
@@ -2484,6 +2500,9 @@ impl Armv6M {
                 // Let's do a fence - unsure if required?
                 std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
             }
+            Instruction::SupervisorCall { imm8 } => {
+                self.supervisor = Some(imm8);
+            }
         }
         Ok(())
     }
@@ -2593,6 +2612,11 @@ impl Armv6M {
         self.breakpoint
     }
 
+    /// Get whether the last instruction was a SVC instruction
+    pub fn supervisor(&self) -> Option<u8> {
+        self.supervisor
+    }
+
     /// Get the N flag
     fn is_n(&self) -> bool {
         (self.aspr & Self::FLAG_N) != 0
@@ -2658,6 +2682,18 @@ impl Armv6M {
     fn sign_extend_imm8(imm8: u8) -> i32 {
         (imm8 as i8) as i32
     }
+}
+
+/// Gets the top-most bits from a word
+///
+/// ```
+/// # use cmsim::topbits;
+/// assert_eq!(topbits(0xABCD, 2), 0b10);
+/// assert_eq!(topbits(0xABCD, 4), 0xA);
+/// assert_eq!(topbits(0xABCD, 8), 0xAB);
+/// ```
+pub fn topbits(word: u16, bits: u8) -> u16 {
+    word >> (16 - bits)
 }
 
 #[cfg(test)]
@@ -4883,6 +4919,23 @@ mod test {
         let i = Armv6M::decode(0b1011011001100010);
         assert_eq!(Ok(Instruction::Cps { im: false }), i);
         assert_eq!("CPSIE i", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn svc_instruction() {
+        let i = Armv6M::decode(0b1101111111001101);
+        assert_eq!(Ok(Instruction::SupervisorCall { imm8: 0xCD }), i);
+        assert_eq!("SVC 0xcd", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn svc_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.execute(Instruction::SupervisorCall { imm8: 0xCD }, &mut ram)
+            .unwrap();
+        assert_eq!(Some(0xCD), cpu.supervisor());
     }
 }
 
