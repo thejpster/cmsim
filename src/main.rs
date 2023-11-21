@@ -37,7 +37,7 @@ impl cmsim::Memory for Region {
     }
 
     fn len(&self) -> u32 {
-        self.contents.len() as u32
+        (self.contents.len() * std::mem::size_of::<u32>()) as u32
     }
 }
 
@@ -118,8 +118,8 @@ impl cmsim::Memory for Uart {
     }
 
     fn len(&self) -> u32 {
-        // five registers, 4 bytes per register
-        5 * 4
+        // five registers
+        (5 * std::mem::size_of::<u32>()) as u32
     }
 }
 
