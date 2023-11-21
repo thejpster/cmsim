@@ -2442,8 +2442,6 @@ impl Armv6M {
             // Other Instructions
             // =======================================================================
             Instruction::Breakpoint { imm8 } => {
-                // Wide instruction
-                self.pc = self.pc.wrapping_add(2);
                 self.breakpoint = Some(imm8);
             }
             Instruction::Mrs { rd, sys_m } => {
