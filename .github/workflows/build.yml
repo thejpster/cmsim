@@ -33,6 +33,5 @@ jobs:
           ./tests/makebin.sh ./target
       - name: Run sample.elf
         run: |
-          nc localhost 8000 > ./target/output.txt &
-          cargo run -- ./target/sample.elf
+          cargo run -- ./target/sample.elf ./target/output.txt
           diff ./target/output.txt ./tests/sample.txt

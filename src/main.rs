@@ -46,14 +46,18 @@ impl cmsim::Memory for Region {
 
 /// Represents a basic UART, compatible with the one in QEMU
 ///
-/// Writes to standard out and reads from stdin.
-#[derive(Debug)]
+/// Writes to anything boxed and writable, optionally reads from a channel.
 struct Uart {
+    /// The last value written to the baud register
     baud: u32,
+    /// The last value written to the control register
     control: u32,
-    stream_out: std::net::TcpStream,
+    /// A place we can write bytes to
+    stream_out: Box<dyn std::io::Write>,
+    /// Acts as a 1-byte buffer, where the top bit is "buffer has data"
     buffer: std::sync::atomic::AtomicU32,
-    stream_in: std::sync::mpsc::Receiver<u8>,
+    /// A place we can read bytes from
+    stream_in: Option<std::sync::mpsc::Receiver<u8>>,
 }
 
 impl cmsim::Memory for Uart {
@@ -66,7 +70,8 @@ impl cmsim::Memory for Uart {
                     self.buffer.store(0, Ordering::Relaxed);
                     Ok(buffered & 0xFF)
                 } else {
-                    let b = self.stream_in.recv().unwrap();
+                    // Reading when status told you not to will cause a panic
+                    let b = self.stream_in.as_ref().unwrap().recv().unwrap();
                     Ok(u32::from(b))
                 }
             }
@@ -75,15 +80,18 @@ impl cmsim::Memory for Uart {
                 let buffered = self.buffer.load(Ordering::Relaxed);
                 if buffered == 0 {
                     // Nothing buffered
-                    match self.stream_in.try_recv() {
-                        Ok(b) => {
+                    match self.stream_in.as_ref().map(|s| s.try_recv()) {
+                        None => {
+                            // No input so buffer empty
+                        }
+                        Some(Ok(b)) => {
                             self.buffer
                                 .store(0x80000000 | u32::from(b), Ordering::Relaxed);
                         }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
                             // Buffer empty
                         }
-                        Err(_e) => {
+                        Some(Err(_e)) => {
                             panic!("Unexpected disconnect on stream thread");
                         }
                     }
@@ -178,26 +186,43 @@ fn main() -> Result<(), std::io::Error> {
         .init();
 
     let binary_name = std::env::args().nth(1).unwrap();
+    let output_file = std::env::args().nth(2);
     let contents = std::fs::read(binary_name).unwrap();
 
     let elf = neotron_loader::Loader::new(contents.as_slice()).expect("Valid ELF file");
 
-    let tcp_listener = std::net::TcpListener::bind("127.0.0.1:8000")?;
-    info!(
-        "Listening on {}. Connect now!",
-        tcp_listener.local_addr().unwrap()
-    );
-
-    let (stream, addr) = tcp_listener.accept().expect("Incoming connection");
-    info!("{addr} connected, starting...");
-
-    let (tx_chan, rx_chan) = std::sync::mpsc::channel();
-    let mut rx_stream = stream.try_clone().unwrap();
-    std::thread::spawn(move || loop {
-        let mut buffer = [0u8; 1];
-        rx_stream.read_exact(&mut buffer).unwrap();
-        tx_chan.send(buffer[0]).unwrap();
-    });
+    let uart = if let Some(name) = output_file {
+        let f = std::fs::File::create(name).expect("Create output file");
+        Uart {
+            baud: 0,
+            control: 0,
+            stream_out: Box::new(f),
+            buffer: std::sync::atomic::AtomicU32::new(0),
+            stream_in: None,
+        }
+    } else {
+        let tcp_listener = std::net::TcpListener::bind("127.0.0.1:8000")?;
+        info!(
+            "Listening on {}. Connect now!",
+            tcp_listener.local_addr().unwrap()
+        );
+        let (stream, addr) = tcp_listener.accept().expect("Incoming connection");
+        info!("{addr} connected, starting...");
+        let (tx_chan, rx_chan) = std::sync::mpsc::channel();
+        let mut rx_stream = stream.try_clone().unwrap();
+        std::thread::spawn(move || loop {
+            let mut buffer = [0u8; 1];
+            rx_stream.read_exact(&mut buffer).unwrap();
+            tx_chan.send(buffer[0]).unwrap();
+        });
+        Uart {
+            baud: 0,
+            control: 0,
+            stream_out: Box::new(stream),
+            buffer: std::sync::atomic::AtomicU32::new(0),
+            stream_in: Some(rx_chan),
+        }
+    };
 
     let mut system = System {
         flash: Region {
@@ -208,13 +233,7 @@ fn main() -> Result<(), std::io::Error> {
             contents: vec![0u32; 256 * 1024].into(),
         },
         ram_start: 0x2000_0000,
-        uart: Uart {
-            baud: 0,
-            control: 0,
-            stream_out: stream,
-            buffer: std::sync::atomic::AtomicU32::new(0),
-            stream_in: rx_chan,
-        },
+        uart,
         uart_start: 0x5930_3000,
     };
 
