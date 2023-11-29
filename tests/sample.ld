@@ -1,4 +1,7 @@
 # Linker script for sample.S
+#
+# Copyright (c) 2023 Jonathan 'theJPster' Pallant
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 EXTERN(_start);
 

@@ -1,3 +1,6 @@
+# Copyright (c) 2023 Jonathan 'theJPster' Pallant
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 [package]
 authors = ["Jonathan 'theJPster' Pallant <github@thejpster.org.uk>"]
 description = "An instruction set simulator for Arm Cortex-M code"
@@ -11,3 +14,4 @@ version = "0.1.0"
 [dependencies]
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
+neotron-loader = "0.1"

@@ -3,6 +3,9 @@
 //! Designed to run on `no_std` systems (although at the moment it's full of
 //! println! calls).
 
+// Copyright (c) 2023 Jonathan 'theJPster' Pallant
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
 
@@ -30,6 +33,14 @@ pub enum Error {
 /// 16-bit and 8-bit operations are done with a read, modify, write on the
 /// appropriate 32-bit word. Unaligned accesses are rejected.
 pub trait Memory {
+    /// Returns how many valid byte addresses in this memory region
+    fn len(&self) -> u32;
+
+    /// Is this region of zero length?
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Fetch a 32-bit value from memory at the given address.
     ///
     /// Gives an error if the address is out-of-bounds or not aligned.
@@ -124,6 +135,11 @@ impl<const N: usize> Memory for [u32; N] {
             .ok_or(Error::InvalidAddress(addr))? = value;
         Ok(())
     }
+
+    fn len(&self) -> u32 {
+        let slice = self.as_slice();
+        std::mem::size_of_val(slice) as u32
+    }
 }
 
 /// Conditions that can be applied to an operation like a Branch
@@ -212,11 +228,13 @@ impl From<u8> for Condition {
 /// All the ARMv6-M supported instructions
 ///
 /// TODO:
-/// * nop
-/// * sxtb
-/// * tst
-/// * udf
-/// * wfi
+/// * sxtb (Sign extend a byte)
+/// * sxth (Sign extend a halfword)
+/// * tst (Test)
+/// * udf (Undefined)
+/// * wfi (Wait for interrupt)
+/// * add r2, pc (0x447a) - Special Data Processing
+/// * add pc, r2 (0x4497) - Special Data Processing
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     // =======================================================================
@@ -566,19 +584,6 @@ pub enum Instruction {
         /// Register list
         register_list: RegisterList,
     },
-    /// Add, Stack Pointer plus Immediate, to Register.
-    ///
-    /// Adds an immediate value to the value in the Stack Pointer and writes the
-    /// result to the destination register.
-    ///
-    /// `ADD <Rd>,SP,#<imm8>`
-    AddSpImmReg {
-        /// The destination register
-        rd: Register,
-        /// How much to add to the stack pointer. Must be a multiple of 4 in
-        /// the range `0..=1020`.
-        imm8x4: u16,
-    },
     /// Add, Stack Pointer plus Immediate.
     ///
     /// Increments the Stack Pointer by an immediate value.
@@ -588,24 +593,6 @@ pub enum Instruction {
         /// How much to add to the stack pointer. Must be a multiple of 4 in
         /// the range `0..=508`.
         imm7x4: u32,
-    },
-    /// Add, Stack Pointer plus Register.
-    ///
-    /// Increments the Stack Pointer by a register value.
-    ///
-    /// `ADD SP,<Rm>`
-    AddSpReg {
-        /// The register containing the value to add to SP
-        rm: Register,
-    },
-    /// Add, Register plus Stack Pointer.
-    ///
-    /// Increments a register value by the Stack Pointer value.
-    ///
-    /// `ADD <Rdm>,SP`
-    AddRegSp {
-        /// The register to be incremented by the value in SP
-        rdm: Register,
     },
     /// Subtract, Stack Pointer minus Immediate.
     ///
@@ -673,6 +660,17 @@ pub enum Instruction {
         /// How much to add to <Rdn>
         imm8: u8,
     },
+    /// Add (Register).
+    ///
+    /// Adds two register values together.
+    ///
+    /// `ADD <Rdn>,<Rm>`
+    AddReg {
+        /// The register that contains the first operand, and the destination
+        rdn: Register,
+        /// The register that contains the second operand
+        rm: Register,
+    },
     /// Add and Set (Register).
     ///
     /// Adds two register values together and write the result to a third
@@ -687,6 +685,21 @@ pub enum Instruction {
         /// The register that contains the second operand
         rm: Register,
     },
+    /// Add, Register plus Immediate, to Register.
+    ///
+    /// Adds an immediate value to the value in the source register, and writes
+    /// the result to the destination register.
+    ///
+    /// `ADD <Rd>,SP|PC,#<imm8x4>`
+    AddRegImmReg {
+        /// The destination register
+        rd: Register,
+        /// The source register
+        rn: Register,
+        /// How much to add to the register. Must be a multiple of 4 in
+        /// the range `0..=1020`.
+        imm8x4: u16,
+    },
     /// Add with Carry, and Set (Register)
     ///
     /// Adds a register value, and the carry bit, to a register. Condition flags
@@ -698,19 +711,6 @@ pub enum Instruction {
         rdn: Register,
         /// The register that contains the second operand
         rm: Register,
-    },
-    /// Address to Register
-    ///
-    /// Add an immediate value to the Program Counter value and write the result
-    /// to the destination register.
-    ///
-    /// `ADR <Rd>,<label>`
-    Adr {
-        /// The destination register
-        rd: Register,
-        /// The offset to apply to the PC. Must be a multiple of 4 in the range
-        /// `0..=1020`.
-        imm8x4: u16,
     },
     /// Subtract and Set (Immediate)
     ///
@@ -1025,6 +1025,15 @@ pub enum Instruction {
     ///
     /// `DMB`
     Dmb,
+    /// Supervisor Call.
+    ///
+    /// Raise a software interrupt with the given number.
+    ///
+    /// `SVC <imm8>`
+    SupervisorCall {
+        /// The 8-bit signed immediate value
+        imm8: u8,
+    },
 }
 
 impl std::fmt::Display for Instruction {
@@ -1119,17 +1128,8 @@ impl std::fmt::Display for Instruction {
             Instruction::Stmia { rn, register_list } => {
                 write!(f, "STMIA {}!,{{{}}}", rn, register_list)
             }
-            Instruction::AddSpImmReg { rd, imm8x4 } => {
-                write!(f, "ADD {rd},SP,#{imm8x4}")
-            }
             Instruction::AddSpImm { imm7x4 } => {
                 write!(f, "ADD SP,#{imm7x4}",)
-            }
-            Instruction::AddSpReg { rm } => {
-                write!(f, "ADD SP,{rm}")
-            }
-            Instruction::AddRegSp { rdm } => {
-                write!(f, "ADD {rdm},SP")
             }
             Instruction::SubSpImm { imm7x4 } => {
                 write!(f, "SUB SP,#{imm7x4}",)
@@ -1146,14 +1146,17 @@ impl std::fmt::Display for Instruction {
             Instruction::AddsImm8 { rdn, imm8 } => {
                 write!(f, "ADDS {rdn},#{imm8}")
             }
+            Instruction::AddReg { rdn, rm } => {
+                write!(f, "ADD {rdn},{rm}")
+            }
             Instruction::AddsReg { rd, rn, rm } => {
                 write!(f, "ADDS {rd},{rn},{rm}")
             }
+            Instruction::AddRegImmReg { rd, rn, imm8x4 } => {
+                write!(f, "ADD {rd},{rn},#{imm8x4}")
+            }
             Instruction::AdcsReg { rdn, rm } => {
                 write!(f, "ADCS {rdn},{rm}")
-            }
-            Instruction::Adr { rd, imm8x4 } => {
-                write!(f, "ADR {rd},#{imm8x4}")
             }
             Instruction::SubsImm3 { rd, rn, imm3 } => {
                 write!(f, "SUBS {rd},{rn},#{imm3}")
@@ -1233,6 +1236,9 @@ impl std::fmt::Display for Instruction {
             }
             Instruction::Dmb => {
                 write!(f, "DMB")
+            }
+            Instruction::SupervisorCall { imm8 } => {
+                write!(f, "SVC 0x{imm8:02x}")
             }
         }
     }
@@ -1387,6 +1393,7 @@ pub struct Armv6M {
     lr: u32,
     pc: u32,
     breakpoint: Option<u8>,
+    supervisor: Option<u8>,
     aspr: u32,
     mode: Mode,
     primask: u32,
@@ -1431,7 +1438,7 @@ impl Armv6M {
             Register::R12 => self.regs[12],
             Register::Lr => self.lr,
             Register::Sp => self.sp,
-            Register::Pc => self.pc,
+            Register::Pc => self.pc + 2,
         }
     }
 
@@ -1460,63 +1467,76 @@ impl Armv6M {
     /// Some instructions are made up of two 16-bit values - you will get
     /// `Error::WideInstruction` if you try and decode half of one.
     pub fn decode(word: u16) -> Result<Instruction, Error> {
-        if (word >> 12) == 0b1101 {
+        if topbits(word, 4) == 0b1101 {
             let cond = ((word >> 8) & 0b1111) as u8;
             let imm8 = word as u8;
-            Ok(Instruction::BranchConditional {
-                cond: Condition::from(cond),
-                imm8x2: Self::sign_extend_imm8(imm8) << 1,
-            })
-        } else if (word >> 11) == 0b11110 {
+            if cond == 0b1111 {
+                Ok(Instruction::SupervisorCall { imm8 })
+            } else {
+                Ok(Instruction::BranchConditional {
+                    cond: Condition::from(cond),
+                    imm8x2: Self::sign_extend_imm8(imm8) << 1,
+                })
+            }
+        } else if topbits(word, 5) == 0b1_1110 {
             // This is a 32-bit BL <label>
             Err(Error::WideInstruction)
-        } else if (word >> 11) == 0b10010 {
+        } else if topbits(word, 5) == 0b1_0010 {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::StrSpImm {
                 rt: Register::from(rt),
                 imm8x4: u16::from(imm8) << 2,
             })
-        } else if (word >> 11) == 0b10011 {
+        } else if topbits(word, 5) == 0b1_0011 {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::LdrSpImm {
                 rt: Register::from(rt),
                 imm8x4: u16::from(imm8) << 2,
             })
-        } else if (word >> 11) == 0b00100 {
+        } else if topbits(word, 5) == 0b0_0100 {
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::MovsImm {
                 rd: Register::from(rd),
                 imm8,
             })
-        } else if (word >> 11) == 0b11100 {
+        } else if topbits(word, 5) == 0b1_1100 {
             Ok(Instruction::Branch {
                 imm11x2: Self::sign_extend_imm11(word & 0x7FF) << 1,
             })
-        } else if (word >> 11) == 0b10101 {
+        } else if topbits(word, 5) == 0b1_0101 {
             let imm8 = (word & 0xFF) as u8;
             let rd = ((word >> 8) & 0b111) as u8;
-            Ok(Instruction::AddSpImmReg {
+            Ok(Instruction::AddRegImmReg {
                 rd: Register::from(rd),
+                rn: Register::Sp,
                 imm8x4: u16::from(imm8) << 2,
             })
-        } else if (word >> 11) == 0b00111 {
+        } else if topbits(word, 5) == 0b1_0100 {
+            let imm8 = (word & 0xFF) as u8;
+            let rd = ((word >> 8) & 0b111) as u8;
+            Ok(Instruction::AddRegImmReg {
+                rd: Register::from(rd),
+                rn: Register::Pc,
+                imm8x4: u16::from(imm8) << 2,
+            })
+        } else if topbits(word, 5) == 0b0_0111 {
             let imm8 = (word & 0xFF) as u8;
             let rdn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::SubsImm8 {
                 rdn: Register::from(rdn),
                 imm8,
             })
-        } else if (word >> 11) == 0b01001 {
+        } else if topbits(word, 5) == 0b0_1001 {
             let imm8 = (word & 0xFF) as u8;
             let rt = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::LdrLiteral {
                 rt: Register::from(rt),
                 imm8x4: u16::from(imm8) << 2,
             })
-        } else if (word >> 11) == 0b01101 {
+        } else if topbits(word, 5) == 0b0_1101 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1525,7 +1545,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5x4: imm5 << 2,
             })
-        } else if (word >> 11) == 0b01100 {
+        } else if topbits(word, 5) == 0b0_1100 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1534,7 +1554,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5x4: imm5 << 2,
             })
-        } else if (word >> 11) == 0b10001 {
+        } else if topbits(word, 5) == 0b1_0001 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1543,7 +1563,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5x2: imm5 << 1,
             })
-        } else if (word >> 11) == 0b10000 {
+        } else if topbits(word, 5) == 0b1_0000 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1552,7 +1572,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5x2: imm5 << 1,
             })
-        } else if (word >> 11) == 0b01111 {
+        } else if topbits(word, 5) == 0b0_1111 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1561,7 +1581,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5,
             })
-        } else if (word >> 11) == 0b01110 {
+        } else if topbits(word, 5) == 0b0_1110 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1570,7 +1590,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm5,
             })
-        } else if (word >> 11) == 0b00000 {
+        } else if topbits(word, 5) == 0b0_0000 {
             let imm5 = ((word >> 6) & 0x1F) as u8;
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1579,7 +1599,7 @@ impl Armv6M {
                 rm: Register::from(rm),
                 imm5,
             })
-        } else if (word >> 11) == 0b00001 {
+        } else if topbits(word, 5) == 0b0_0001 {
             let mut imm5 = ((word >> 6) & 0x1F) as u8;
             if imm5 == 0 {
                 imm5 = 32;
@@ -1591,7 +1611,7 @@ impl Armv6M {
                 rm: Register::from(rm),
                 imm5,
             })
-        } else if (word >> 11) == 0b00010 {
+        } else if topbits(word, 5) == 0b0_0010 {
             let mut imm5 = ((word >> 6) & 0x1F) as u8;
             if imm5 == 0 {
                 imm5 = 32;
@@ -1603,56 +1623,49 @@ impl Armv6M {
                 rm: Register::from(rm),
                 imm5,
             })
-        } else if (word >> 11) == 0b00101 {
+        } else if topbits(word, 5) == 0b0_0101 {
             let imm8 = (word & 0xFF) as u8;
             let rn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::CmpImm {
                 rn: Register::from(rn),
                 imm8,
             })
-        } else if (word >> 11) == 0b00110 {
+        } else if topbits(word, 5) == 0b0_0110 {
             let imm8 = (word & 0xFF) as u8;
             let rdn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::AddsImm8 {
                 rdn: Register::from(rdn),
                 imm8,
             })
-        } else if (word >> 11) == 0b11000 {
+        } else if topbits(word, 5) == 0b1_1000 {
             let register_list = (word & 0xFF) as u8;
             let rn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::Stmia {
                 rn: Register::from(rn),
                 register_list: RegisterList::new(register_list),
             })
-        } else if (word >> 11) == 0b11001 {
+        } else if topbits(word, 5) == 0b1_1001 {
             let register_list = (word & 0xFF) as u8;
             let rn = ((word >> 8) & 0b111) as u8;
             Ok(Instruction::Ldmia {
                 rn: Register::from(rn),
                 register_list: RegisterList::new(register_list),
             })
-        } else if (word >> 11) == 0b10100 {
-            let imm8 = (word & 0xFF) as u8;
-            let rd = ((word >> 8) & 0b111) as u8;
-            Ok(Instruction::Adr {
-                rd: Register::from(rd),
-                imm8x4: u16::from(imm8) << 2,
-            })
-        } else if (word >> 9) == 0b1011010 {
+        } else if topbits(word, 7) == 0b101_1010 {
             let m = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
             Ok(Instruction::Push {
                 register_list: RegisterList::new(register_list),
                 m,
             })
-        } else if (word >> 9) == 0b1011110 {
+        } else if topbits(word, 7) == 0b101_1110 {
             let p = ((word >> 8) & 1) == 1;
             let register_list = word as u8;
             Ok(Instruction::Pop {
                 register_list: RegisterList::new(register_list),
                 p,
             })
-        } else if (word >> 9) == 0b0001110 {
+        } else if topbits(word, 7) == 0b000_1110 {
             let imm3 = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1661,7 +1674,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm3,
             })
-        } else if (word >> 9) == 0b0001100 {
+        } else if topbits(word, 7) == 0b000_1100 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1670,7 +1683,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0001111 {
+        } else if topbits(word, 7) == 0b000_1111 {
             let imm3 = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1679,7 +1692,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 imm3,
             })
-        } else if (word >> 9) == 0b0001101 {
+        } else if topbits(word, 7) == 0b000_1101 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
@@ -1688,7 +1701,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101000 {
+        } else if topbits(word, 7) == 0b010_1000 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1697,7 +1710,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101001 {
+        } else if topbits(word, 7) == 0b010_1001 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1706,7 +1719,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101010 {
+        } else if topbits(word, 7) == 0b010_1010 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1715,7 +1728,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101100 {
+        } else if topbits(word, 7) == 0b010_1100 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1724,7 +1737,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101101 {
+        } else if topbits(word, 7) == 0b010_1101 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1733,7 +1746,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101110 {
+        } else if topbits(word, 7) == 0b010_1110 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1742,7 +1755,7 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 9) == 0b0101011 {
+        } else if topbits(word, 7) == 0b010_1011 {
             let rm = ((word >> 6) & 0b111) as u8;
             let rn = ((word >> 3) & 0b111) as u8;
             let rt = (word & 0b111) as u8;
@@ -1751,16 +1764,18 @@ impl Armv6M {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 8) == 0b10111110 {
+        } else if topbits(word, 8) == 0b1011_1110 {
             let imm8 = (word & 0xFF) as u8;
             Ok(Instruction::Breakpoint { imm8 })
-        } else if (word >> 8) == 0b01000100 && ((word >> 3) & 0b1111) == 0b1101 {
-            let dm = (word >> 7) & 1;
-            let rdm = ((dm << 4) | (word & 0b111)) as u8;
-            Ok(Instruction::AddRegSp {
-                rdm: Register::from(rdm),
+        } else if topbits(word, 8) == 0b0100_0100 {
+            let d: u8 = ((word >> 7) & 0b1) as u8;
+            let rd = (d << 3) | (word & 0b111) as u8;
+            let rm: u8 = ((word >> 3) & 0b1111) as u8;
+            Ok(Instruction::AddReg {
+                rdn: Register::from(rd),
+                rm: Register::from(rm),
             })
-        } else if (word >> 8) == 0b01000110 {
+        } else if topbits(word, 8) == 0b0100_0110 {
             let d: u8 = ((word >> 7) & 0b1) as u8;
             let rd = (d << 3) | (word & 0b111) as u8;
             let rm: u8 = ((word >> 3) & 0b1111) as u8;
@@ -1768,130 +1783,125 @@ impl Armv6M {
                 rm: Register::from(rm),
                 rd: Register::from(rd),
             })
-        } else if (word >> 7) == 0b010001110 {
+        } else if topbits(word, 9) == 0b0_1000_1110 {
             let rm = ((word >> 3) & 0b1111) as u8;
             Ok(Instruction::BranchExchange {
                 rm: Register::from(rm),
             })
-        } else if (word >> 7) == 0b010001111 {
+        } else if topbits(word, 9) == 0b0_1000_1111 {
             let rm = ((word >> 3) & 0b1111) as u8;
             Ok(Instruction::BranchLinkExchange {
                 rm: Register::from(rm),
             })
-        } else if (word >> 7) == 0b101100000 {
+        } else if topbits(word, 9) == 0b1_0110_0000 {
             let imm7 = (word & 0x7F) as u8;
             Ok(Instruction::AddSpImm {
                 imm7x4: u32::from(imm7) << 2,
             })
-        } else if (word >> 7) == 0b101100001 {
+        } else if topbits(word, 9) == 0b1_0110_0001 {
             let imm7 = (word & 0x7F) as u8;
             Ok(Instruction::SubSpImm {
                 imm7x4: u32::from(imm7) << 2,
             })
-        } else if (word >> 7) == 0b010001001 && (word & 0b111) == 0b101 {
-            let rm: u8 = ((word >> 3) & 0b1111) as u8;
-            Ok(Instruction::AddSpReg {
-                rm: Register::from(rm),
-            })
-        } else if (word >> 6) == 0b0100000010 {
+        } else if topbits(word, 10) == 0b01_0000_0010 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::LslsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100000011 {
+        } else if topbits(word, 10) == 0b01_0000_0011 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::LsrsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001101 {
+        } else if topbits(word, 10) == 0b01_0000_1101 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::Muls {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b1011001010 {
+        } else if topbits(word, 10) == 0b10_1100_1010 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
             Ok(Instruction::Uxth {
                 rd: Register::from(rd),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b1011001011 {
+        } else if topbits(word, 10) == 0b10_1100_1011 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
             Ok(Instruction::Uxtb {
                 rd: Register::from(rd),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001010 {
+        } else if topbits(word, 10) == 0b01_0000_1010 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rn = (word & 0b111) as u8;
             Ok(Instruction::CmpReg {
                 rn: Register::from(rn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100000000 {
+        } else if topbits(word, 10) == 0b01_0000_0000 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::AndsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001100 {
+        } else if topbits(word, 10) == 0b01_0000_1100 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::OrrsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100000001 {
+        } else if topbits(word, 10) == 0b01_0000_0001 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::EorsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001110 {
+        } else if topbits(word, 10) == 0b01_0000_1110 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::BicsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001111 {
+        } else if topbits(word, 10) == 0b01_0000_1111 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
             Ok(Instruction::MvnsReg {
                 rd: Register::from(rd),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100001001 {
+        } else if topbits(word, 10) == 0b01_0000_1001 {
             let rn = ((word >> 3) & 0b111) as u8;
             let rd = (word & 0b111) as u8;
             Ok(Instruction::RsbImm {
                 rd: Register::from(rd),
                 rn: Register::from(rn),
             })
-        } else if (word >> 6) == 0b0100000101 {
+        } else if topbits(word, 10) == 0b01_0000_0101 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::AdcsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 6) == 0b0100000110 {
+        } else if topbits(word, 10) == 0b01_0000_0110 {
             let rm = ((word >> 3) & 0b111) as u8;
             let rdn = (word & 0b111) as u8;
             Ok(Instruction::SbcsReg {
                 rdn: Register::from(rdn),
                 rm: Register::from(rm),
             })
-        } else if (word >> 5) == 0b10110110011 {
+        } else if topbits(word, 11) == 0b101_1011_0011 {
             let im = ((word >> 4) & 1) != 0;
             Ok(Instruction::Cps { im })
         } else {
@@ -1901,7 +1911,7 @@ impl Armv6M {
 
     /// Decode a 32-bit T2 instruction from two 16-bit words.
     pub fn decode32(word1: u16, word2: u16) -> Result<Instruction, Error> {
-        if (word1 >> 11) == 0b11110 && (word2 >> 14) == 0b11 {
+        if topbits(word1, 5) == 0b1_1110 && topbits(word2, 2) == 0b11 {
             // Branch with Link
             // See ARMv6-M Architecture Rference Manual A6.7.13
             let s_imm10 = u32::from(word1 & 0x7FF);
@@ -1918,21 +1928,21 @@ impl Armv6M {
             Ok(Instruction::BranchLink {
                 imm24: imm24 as i32,
             })
-        } else if (word1 == 0b1111001111101111) && (word2 >> 12) == 0b1000 {
+        } else if (word1 == 0b1111001111101111) && topbits(word2, 4) == 0b1000 {
             let sys_m = (word2 & 0xFF) as u8;
             let rd = ((word2 >> 8) & 0b1111) as u8;
             Ok(Instruction::Mrs {
                 rd: Register::from(rd),
                 sys_m,
             })
-        } else if (word1 >> 4) == 0b111100111000 && (word2 >> 8) == 0b10001000 {
+        } else if topbits(word1, 12) == 0b1111_0011_1000 && topbits(word2, 8) == 0b1000_1000 {
             let sys_m = (word2 & 0xFF) as u8;
             let rn = (word1 & 0b1111) as u8;
             Ok(Instruction::Msr {
                 rn: Register::from(rn),
                 sys_m,
             })
-        } else if (word1 >> 4) == 0b111100111011 && (word2 >> 4) == 0b100011110101 {
+        } else if topbits(word1, 12) == 0b1111_0011_1011 && topbits(word2, 12) == 0b1000_1111_0101 {
             Ok(Instruction::Dmb)
         } else {
             Err(Error::InvalidInstruction32(word1, word2))
@@ -1954,24 +1964,22 @@ impl Armv6M {
             // =======================================================================
             Instruction::Branch { imm11x2 } => {
                 // Assume PC's next increment has happened already
-                self.pc = self.pc.wrapping_add(2);
-                self.pc = self.pc.wrapping_add(imm11x2 as u32);
+                self.pc = self.register(Register::Pc).wrapping_add(imm11x2 as u32);
             }
             Instruction::BranchConditional { cond, imm8x2 } => {
                 if self.check_condition(cond) {
                     // Assume PC's next increment has happened already
-                    self.pc = self.pc.wrapping_add(2);
-                    self.pc = self.pc.wrapping_add(imm8x2 as u32);
+                    self.pc = self.register(Register::Pc).wrapping_add(imm8x2 as u32);
                 }
             }
             Instruction::BranchLink { imm24 } => {
                 // Assume PC's next increment has happened already
-                let old_pc = self.pc.wrapping_add(2);
+                let old_pc = self.register(Register::Pc);
                 self.lr = (old_pc & !1) | 1;
                 self.pc = old_pc.wrapping_add(imm24 as u32);
             }
             Instruction::BranchExchange { rm } => {
-                let addr = self.fetch_reg(rm);
+                let addr = self.register(rm);
                 if self.mode == Mode::Handler && (addr >> 28) == 0b1111 {
                     // Return from Exception
                     todo!()
@@ -1983,7 +1991,7 @@ impl Armv6M {
                 }
             }
             Instruction::BranchLinkExchange { rm } => {
-                let addr = self.fetch_reg(rm);
+                let addr = self.register(rm);
                 self.lr = (self.pc & !1) | 1;
                 self.pc = addr & !1;
             }
@@ -1999,7 +2007,7 @@ impl Armv6M {
                 // v is unchanged
             }
             Instruction::MovReg { rm, rd } => {
-                let value = self.fetch_reg(rm);
+                let value = self.register(rm);
                 if rd == Register::Pc {
                     self.store_reg(rd, value & !1);
                 } else {
@@ -2010,42 +2018,42 @@ impl Armv6M {
             // Store Instructions
             // =======================================================================
             Instruction::StrImm { rt, rn, imm5x4 } => {
-                let addr = self.fetch_reg(rn);
+                let addr = self.register(rn);
                 let offset_addr = addr.wrapping_add(u32::from(imm5x4));
-                let value = self.fetch_reg(rt);
+                let value = self.register(rt);
                 memory.store_u32(offset_addr, value)?;
             }
             Instruction::StrReg { rt, rn, rm } => {
-                let offset = self.fetch_reg(rm);
-                let addr = self.fetch_reg(rn);
+                let offset = self.register(rm);
+                let addr = self.register(rn);
                 let offset_addr = addr.wrapping_add(offset);
-                let value = self.fetch_reg(rt);
+                let value = self.register(rt);
                 memory.store_u32(offset_addr, value)?;
             }
             Instruction::StrhImm { rt, rn, imm5x2 } => {
-                let addr = self.fetch_reg(rn);
+                let addr = self.register(rn);
                 let offset_addr = addr.wrapping_add(u32::from(imm5x2));
-                let value = self.fetch_reg(rt);
+                let value = self.register(rt);
                 memory.store_u16(offset_addr, value as u16)?;
             }
             Instruction::StrhReg { rt, rn, rm } => {
-                let offset = self.fetch_reg(rm);
-                let addr = self.fetch_reg(rn);
+                let offset = self.register(rm);
+                let addr = self.register(rn);
                 let offset_addr = addr.wrapping_add(offset);
-                let value = self.fetch_reg(rt);
+                let value = self.register(rt);
                 memory.store_u16(offset_addr, value as u16)?;
             }
             Instruction::StrbImm { rt, rn, imm5 } => {
-                let addr = self.fetch_reg(rn);
+                let addr = self.register(rn);
                 let offset_addr = addr.wrapping_add(u32::from(imm5));
-                let value = self.fetch_reg(rt);
+                let value = self.register(rt);
                 memory.store_u8(offset_addr, (value & 0xFF) as u8)?;
             }
             Instruction::StrbReg { rt, rn, rm } => {
-                let offset = self.fetch_reg(rm);
-                let addr = self.fetch_reg(rn);
+                let offset = self.register(rm);
+                let addr = self.register(rn);
                 let offset_addr = addr.wrapping_add(offset);
-                let value = self.fetch_reg(rt);
+                let value = self.register(rt);
                 memory.store_u8(offset_addr, (value & 0xFF) as u8)?;
             }
             // =======================================================================
@@ -2054,53 +2062,53 @@ impl Armv6M {
             Instruction::LdrLiteral { rt, imm8x4 } => {
                 // Assume's PC next increment has happened already
                 // Also align to 4 bytes
-                let base = (self.pc.wrapping_add(2)) & !0b11;
+                let base = self.register(Register::Pc) & !0b11;
                 let addr = base.wrapping_add(u32::from(imm8x4));
                 let value = memory.load_u32(addr)?;
                 self.store_reg(rt, value);
             }
             Instruction::LdrImm { rt, rn, imm5x4 } => {
-                let addr = self.fetch_reg(rn);
+                let addr = self.register(rn);
                 let offset_addr = addr.wrapping_add(u32::from(imm5x4));
                 let value = memory.load_u32(offset_addr)?;
                 self.store_reg(rt, value);
             }
             Instruction::LdrReg { rt, rn, rm } => {
-                let addr = self.fetch_reg(rn);
-                let offset = self.fetch_reg(rm);
+                let addr = self.register(rn);
+                let offset = self.register(rm);
                 let offset_addr = addr.wrapping_add(offset);
                 let value = memory.load_u32(offset_addr)?;
                 self.store_reg(rt, value);
             }
             Instruction::LdrhImm { rt, rn, imm5x2 } => {
-                let addr = self.fetch_reg(rn);
+                let addr = self.register(rn);
                 let offset_addr = addr.wrapping_add(u32::from(imm5x2));
                 let value = memory.load_u16(offset_addr)?;
                 self.store_reg(rt, u32::from(value));
             }
             Instruction::LdrhReg { rt, rn, rm } => {
-                let addr = self.fetch_reg(rn);
-                let offset = self.fetch_reg(rm);
+                let addr = self.register(rn);
+                let offset = self.register(rm);
                 let offset_addr = addr.wrapping_add(offset);
                 let value = memory.load_u16(offset_addr)?;
                 self.store_reg(rt, u32::from(value));
             }
             Instruction::LdrbImm { rt, rn, imm5 } => {
-                let addr = self.fetch_reg(rn);
+                let addr = self.register(rn);
                 let offset_addr = addr.wrapping_add(u32::from(imm5));
                 let value = memory.load_u8(offset_addr)?;
                 self.store_reg(rt, u32::from(value));
             }
             Instruction::LdrbReg { rt, rn, rm } => {
-                let addr = self.fetch_reg(rn);
-                let offset = self.fetch_reg(rm);
+                let addr = self.register(rn);
+                let offset = self.register(rm);
                 let offset_addr = addr.wrapping_add(offset);
                 let value = memory.load_u8(offset_addr)?;
                 self.store_reg(rt, u32::from(value));
             }
             Instruction::LdrsbReg { rt, rn, rm } => {
-                let addr = self.fetch_reg(rn);
-                let offset = self.fetch_reg(rm);
+                let addr = self.register(rn);
+                let offset = self.register(rm);
                 let offset_addr = addr.wrapping_add(offset);
                 let value = memory.load_u8(offset_addr)?;
                 self.store_reg(rt, i32::from(value as i8) as u32);
@@ -2115,7 +2123,7 @@ impl Armv6M {
                 }
                 for register in (0..=7).rev().map(Register::from) {
                     if register_list.is_set(register) {
-                        let value = self.fetch_reg(register);
+                        let value = self.register(register);
                         self.push_stack(value, memory)?;
                     }
                 }
@@ -2132,7 +2140,7 @@ impl Armv6M {
                 }
             }
             Instruction::Ldmia { rn, register_list } => {
-                let mut base = self.fetch_reg(rn);
+                let mut base = self.register(rn);
                 for register in (0..=7).map(Register::from) {
                     if register_list.is_set(register) {
                         let value = memory.load_u32(base)?;
@@ -2145,10 +2153,10 @@ impl Armv6M {
                 }
             }
             Instruction::Stmia { rn, register_list } => {
-                let mut base = self.fetch_reg(rn);
+                let mut base = self.register(rn);
                 for register in (0..=7).map(Register::from) {
                     if register_list.is_set(register) {
-                        let value = self.fetch_reg(register);
+                        let value = self.register(register);
                         memory.store_u32(base, value)?;
                         base = base.wrapping_add(4);
                     }
@@ -2157,21 +2165,13 @@ impl Armv6M {
                     self.store_reg(rn, base);
                 }
             }
-            Instruction::AddSpImmReg { rd, imm8x4 } => {
-                let sp = self.sp;
-                let value = sp.wrapping_add(u32::from(imm8x4));
+            Instruction::AddRegImmReg { rd, rn, imm8x4 } => {
+                let source = self.register(rn);
+                let value = source.wrapping_add(u32::from(imm8x4));
                 self.store_reg(rd, value);
             }
             Instruction::AddSpImm { imm7x4 } => {
                 self.sp = self.sp.wrapping_add(imm7x4);
-            }
-            Instruction::AddSpReg { rm } => {
-                let offset = self.fetch_reg(rm);
-                self.sp = self.sp.wrapping_add(offset);
-            }
-            Instruction::AddRegSp { rdm } => {
-                let value = self.fetch_reg(rdm);
-                self.store_reg(rdm, value.wrapping_add(self.sp));
             }
             Instruction::SubSpImm { imm7x4 } => {
                 // This does a subtraction
@@ -2185,14 +2185,14 @@ impl Armv6M {
             }
             Instruction::StrSpImm { rt, imm8x4 } => {
                 let offset_addr = self.sp.wrapping_add(u32::from(imm8x4));
-                let value = self.fetch_reg(rt);
+                let value = self.register(rt);
                 memory.store_u32(offset_addr, value)?;
             }
             // =======================================================================
             // Arithmetic Instructions
             // =======================================================================
             Instruction::AddsImm3 { rd, rn, imm3 } => {
-                let value1 = self.fetch_reg(rn);
+                let value1 = self.register(rn);
                 let value2 = u32::from(imm3);
                 let (result, carry_out, overflow) = Self::add_with_carry(value1, value2, false);
                 self.set_n(result >= 0x8000_0000);
@@ -2202,7 +2202,7 @@ impl Armv6M {
                 self.store_reg(rd, result);
             }
             Instruction::AddsImm8 { rdn, imm8 } => {
-                let value1 = self.fetch_reg(rdn);
+                let value1 = self.register(rdn);
                 let value2 = u32::from(imm8);
                 let (result, carry_out, overflow) = Self::add_with_carry(value1, value2, false);
                 self.set_n(result >= 0x8000_0000);
@@ -2211,9 +2211,15 @@ impl Armv6M {
                 self.set_v(overflow);
                 self.store_reg(rdn, result);
             }
+            Instruction::AddReg { rdn, rm } => {
+                let value1 = self.register(rdn);
+                let value2 = self.register(rm);
+                let (result, _carry_out, _overflow) = Self::add_with_carry(value1, value2, false);
+                self.store_reg(rdn, result);
+            }
             Instruction::AddsReg { rd, rn, rm } => {
-                let value1 = self.fetch_reg(rn);
-                let value2 = self.fetch_reg(rm);
+                let value1 = self.register(rn);
+                let value2 = self.register(rm);
                 let (result, carry_out, overflow) = Self::add_with_carry(value1, value2, false);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
@@ -2222,8 +2228,8 @@ impl Armv6M {
                 self.store_reg(rd, result);
             }
             Instruction::AdcsReg { rdn, rm } => {
-                let value1 = self.fetch_reg(rdn);
-                let value2 = self.fetch_reg(rm);
+                let value1 = self.register(rdn);
+                let value2 = self.register(rm);
                 let (result, carry_out, overflow) =
                     Self::add_with_carry(value1, value2, self.is_c());
                 self.set_n(result >= 0x8000_0000);
@@ -2232,13 +2238,8 @@ impl Armv6M {
                 self.set_v(overflow);
                 self.store_reg(rdn, result);
             }
-            Instruction::Adr { rd, imm8x4 } => {
-                let base = (self.pc.wrapping_add(2)) & !0b11;
-                let addr = base.wrapping_add(u32::from(imm8x4));
-                self.store_reg(rd, addr);
-            }
             Instruction::SubsImm3 { rd, rn, imm3 } => {
-                let value1 = self.fetch_reg(rn);
+                let value1 = self.register(rn);
                 let value2 = u32::from(imm3);
                 let (result, carry_out, overflow) = Self::add_with_carry(value1, !value2, true);
                 self.set_n(result >= 0x8000_0000);
@@ -2248,7 +2249,7 @@ impl Armv6M {
                 self.store_reg(rd, result);
             }
             Instruction::SubsImm8 { rdn, imm8 } => {
-                let value1 = self.fetch_reg(rdn);
+                let value1 = self.register(rdn);
                 let value2 = u32::from(imm8);
                 let (result, carry_out, overflow) = Self::add_with_carry(value1, !value2, true);
                 self.set_n(result >= 0x8000_0000);
@@ -2258,8 +2259,8 @@ impl Armv6M {
                 self.store_reg(rdn, result);
             }
             Instruction::SubsReg { rd, rn, rm } => {
-                let value1 = self.fetch_reg(rn);
-                let value2 = self.fetch_reg(rm);
+                let value1 = self.register(rn);
+                let value2 = self.register(rm);
                 let (result, carry_out, overflow) = Self::add_with_carry(value1, !value2, true);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
@@ -2268,8 +2269,8 @@ impl Armv6M {
                 self.store_reg(rd, result);
             }
             Instruction::SbcsReg { rdn, rm } => {
-                let value1 = self.fetch_reg(rdn);
-                let value2 = self.fetch_reg(rm);
+                let value1 = self.register(rdn);
+                let value2 = self.register(rm);
                 let (result, carry_out, overflow) =
                     Self::add_with_carry(value1, !value2, self.is_c());
                 self.set_n(result >= 0x8000_0000);
@@ -2279,7 +2280,7 @@ impl Armv6M {
                 self.store_reg(rdn, result);
             }
             Instruction::RsbImm { rd, rn } => {
-                let value1 = self.fetch_reg(rn);
+                let value1 = self.register(rn);
                 let (result, carry_out, overflow) = Self::add_with_carry(!value1, 0, true);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
@@ -2288,7 +2289,7 @@ impl Armv6M {
                 self.store_reg(rd, result);
             }
             Instruction::LslsImm { rd, rm, imm5 } => {
-                let value = self.fetch_reg(rm);
+                let value = self.register(rm);
                 let shift_n = u32::from(imm5);
                 let carry_in = self.is_c();
                 let (result, carry_out) = if shift_n == 0 {
@@ -2304,8 +2305,8 @@ impl Armv6M {
                 self.set_c(carry_out);
             }
             Instruction::LslsReg { rdn, rm } => {
-                let value = self.fetch_reg(rdn);
-                let shift_n = self.fetch_reg(rm) & 0xFF;
+                let value = self.register(rdn);
+                let shift_n = self.register(rm) & 0xFF;
                 let carry_in = self.is_c();
                 let (result, carry_out) = if shift_n == 0 {
                     (value, carry_in)
@@ -2320,7 +2321,7 @@ impl Armv6M {
                 self.set_c(carry_out);
             }
             Instruction::LsrsImm { rd, rm, imm5 } => {
-                let value = self.fetch_reg(rm);
+                let value = self.register(rm);
                 let shift_n = u32::from(imm5);
                 let result = value >> shift_n;
                 let carry_out = (value & (1 << (shift_n - 1))) != 0;
@@ -2330,8 +2331,8 @@ impl Armv6M {
                 self.set_c(carry_out);
             }
             Instruction::LsrsReg { rdn, rm } => {
-                let value = self.fetch_reg(rdn);
-                let shift_n = self.fetch_reg(rm) & 0xFF;
+                let value = self.register(rdn);
+                let shift_n = self.register(rm) & 0xFF;
                 let result = value >> shift_n;
                 let carry_out = (value & (1 << (shift_n - 1))) != 0;
                 self.store_reg(rdn, result);
@@ -2340,7 +2341,7 @@ impl Armv6M {
                 self.set_c(carry_out);
             }
             Instruction::AsrsImm { rd, rm, imm5 } => {
-                let value = self.fetch_reg(rm) as i32;
+                let value = self.register(rm) as i32;
                 let shift_n = u32::from(imm5);
                 let result = value >> shift_n;
                 let carry_out = (value & (1 << (shift_n - 1))) != 0;
@@ -2350,27 +2351,27 @@ impl Armv6M {
                 self.set_c(carry_out);
             }
             Instruction::Muls { rdn, rm } => {
-                let value1 = self.fetch_reg(rdn);
-                let value2 = self.fetch_reg(rm);
+                let value1 = self.register(rdn);
+                let value2 = self.register(rm);
                 let result = value1.wrapping_mul(value2);
                 self.store_reg(rdn, result);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
             }
             Instruction::Uxth { rd, rm } => {
-                let value = self.fetch_reg(rm) & 0xFFFF;
+                let value = self.register(rm) & 0xFFFF;
                 self.store_reg(rd, value);
             }
             Instruction::Uxtb { rd, rm } => {
-                let value = self.fetch_reg(rm) & 0xFF;
+                let value = self.register(rm) & 0xFF;
                 self.store_reg(rd, value);
             }
             // =======================================================================
             // Logical Instructions
             // =======================================================================
             Instruction::CmpReg { rm, rn } => {
-                let value_m = self.fetch_reg(rm);
-                let value_n = self.fetch_reg(rn);
+                let value_m = self.register(rm);
+                let value_n = self.register(rn);
                 let (result, carry, overflow) = Self::add_with_carry(value_n, !value_m, true);
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
@@ -2378,7 +2379,7 @@ impl Armv6M {
                 self.set_v(overflow);
             }
             Instruction::CmpImm { rn, imm8 } => {
-                let value_n = self.fetch_reg(rn);
+                let value_n = self.register(rn);
                 let (result, carry, overflow) =
                     Self::add_with_carry(value_n, !u32::from(imm8), true);
                 self.set_n(result >= 0x8000_0000);
@@ -2387,39 +2388,39 @@ impl Armv6M {
                 self.set_v(overflow);
             }
             Instruction::AndsReg { rdn, rm } => {
-                let value_m = self.fetch_reg(rm);
-                let value_n = self.fetch_reg(rdn);
+                let value_m = self.register(rm);
+                let value_n = self.register(rdn);
                 let result = value_n & value_m;
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
                 self.store_reg(rdn, result);
             }
             Instruction::OrrsReg { rdn, rm } => {
-                let value_m = self.fetch_reg(rm);
-                let value_n = self.fetch_reg(rdn);
+                let value_m = self.register(rm);
+                let value_n = self.register(rdn);
                 let result = value_n | value_m;
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
                 self.store_reg(rdn, result);
             }
             Instruction::EorsReg { rdn, rm } => {
-                let value_m = self.fetch_reg(rm);
-                let value_n = self.fetch_reg(rdn);
+                let value_m = self.register(rm);
+                let value_n = self.register(rdn);
                 let result = value_n ^ value_m;
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
                 self.store_reg(rdn, result);
             }
             Instruction::BicsReg { rdn, rm } => {
-                let value_m = self.fetch_reg(rm);
-                let value_n = self.fetch_reg(rdn);
+                let value_m = self.register(rm);
+                let value_n = self.register(rdn);
                 let result = value_n & !value_m;
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
                 self.store_reg(rdn, result);
             }
             Instruction::MvnsReg { rd, rm } => {
-                let value_m = self.fetch_reg(rm);
+                let value_m = self.register(rm);
                 let result = !value_m;
                 self.set_n(result >= 0x8000_0000);
                 self.set_z(result == 0);
@@ -2429,8 +2430,6 @@ impl Armv6M {
             // Other Instructions
             // =======================================================================
             Instruction::Breakpoint { imm8 } => {
-                // Wide instruction
-                self.pc = self.pc.wrapping_add(2);
                 self.breakpoint = Some(imm8);
             }
             Instruction::Mrs { rd, sys_m } => {
@@ -2439,7 +2438,7 @@ impl Armv6M {
 
                 match sys_m {
                     Self::SYS_M_PRIMASK => {
-                        self.primask = self.fetch_reg(rd);
+                        self.primask = self.register(rd);
                     }
                     _ => {
                         return Err(Error::UnknownSpecialRegister(sys_m));
@@ -2472,6 +2471,9 @@ impl Armv6M {
                 self.pc = self.pc.wrapping_add(2);
                 // Let's do a fence - unsure if required?
                 std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+            }
+            Instruction::SupervisorCall { imm8 } => {
+                self.supervisor = Some(imm8);
             }
         }
         Ok(())
@@ -2555,31 +2557,14 @@ impl Armv6M {
         }
     }
 
-    /// Get a value from the given register
-    fn fetch_reg(&mut self, register: Register) -> u32 {
-        match register {
-            Register::R0 => self.regs[0],
-            Register::R1 => self.regs[1],
-            Register::R2 => self.regs[2],
-            Register::R3 => self.regs[3],
-            Register::R4 => self.regs[4],
-            Register::R5 => self.regs[5],
-            Register::R6 => self.regs[6],
-            Register::R7 => self.regs[7],
-            Register::R8 => self.regs[8],
-            Register::R9 => self.regs[9],
-            Register::R10 => self.regs[10],
-            Register::R11 => self.regs[11],
-            Register::R12 => self.regs[12],
-            Register::Lr => self.lr,
-            Register::Sp => self.sp,
-            Register::Pc => self.pc,
-        }
-    }
-
     /// Get whether the last instruction was a BKPT instruction
     pub fn breakpoint(&self) -> Option<u8> {
         self.breakpoint
+    }
+
+    /// Get whether the last instruction was a SVC instruction
+    pub fn supervisor(&self) -> Option<u8> {
+        self.supervisor
     }
 
     /// Get the N flag
@@ -2647,6 +2632,18 @@ impl Armv6M {
     fn sign_extend_imm8(imm8: u8) -> i32 {
         (imm8 as i8) as i32
     }
+}
+
+/// Gets the top-most bits from a word
+///
+/// ```
+/// # use cmsim::topbits;
+/// assert_eq!(topbits(0xABCD, 2), 0b10);
+/// assert_eq!(topbits(0xABCD, 4), 0xA);
+/// assert_eq!(topbits(0xABCD, 8), 0xAB);
+/// ```
+pub fn topbits(word: u16, bits: u8) -> u16 {
+    word >> (16 - bits)
 }
 
 #[cfg(test)]
@@ -3710,8 +3707,9 @@ mod test {
     fn add_sp_imm_reg_instruction() {
         let i = Armv6M::decode(0b1010111100000000);
         assert_eq!(
-            Ok(Instruction::AddSpImmReg {
+            Ok(Instruction::AddRegImmReg {
                 rd: Register::R7,
+                rn: Register::Sp,
                 imm8x4: 0
             }),
             i
@@ -3725,14 +3723,46 @@ mod test {
         let mut cpu = Armv6M::new(sp, 0x0);
         let mut ram = [15; 8];
         cpu.execute(
-            Instruction::AddSpImmReg {
+            Instruction::AddRegImmReg {
                 rd: Register::R0,
+                rn: Register::Sp,
                 imm8x4: 16,
             },
             &mut ram,
         )
         .unwrap();
-        assert_eq!(32 + 4 * 4, cpu.regs[0]);
+        assert_eq!(32 + 16, cpu.regs[0]);
+    }
+
+    #[test]
+    fn add_pc_imm_reg_instruction() {
+        let i = Armv6M::decode(0b1010011100000000);
+        assert_eq!(
+            Ok(Instruction::AddRegImmReg {
+                rd: Register::R7,
+                rn: Register::Pc,
+                imm8x4: 0
+            }),
+            i
+        );
+        assert_eq!("ADD R7,PC,#0", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn add_pc_imm_reg_operation() {
+        let sp = 32;
+        let mut cpu = Armv6M::new(sp, 100);
+        let mut ram = [15; 8];
+        cpu.execute(
+            Instruction::AddRegImmReg {
+                rd: Register::R0,
+                rn: Register::Pc,
+                imm8x4: 16,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(100 + 4 + 16, cpu.regs[0]);
     }
 
     #[test]
@@ -3750,42 +3780,6 @@ mod test {
         cpu.execute(Instruction::AddSpImm { imm7x4: 64 }, &mut ram)
             .unwrap();
         assert_eq!(0x100 + 64, cpu.sp);
-    }
-
-    #[test]
-    fn add_sp_reg_instruction() {
-        let i = Armv6M::decode(0b0100010010001101);
-        assert_eq!(Ok(Instruction::AddSpReg { rm: Register::R1 }), i);
-        assert_eq!("ADD SP,R1", format!("{}", i.unwrap()));
-    }
-
-    #[test]
-    fn add_sp_reg_operation() {
-        let sp = 32;
-        let mut cpu = Armv6M::new(sp, 0x0);
-        let mut ram = [15; 8];
-        cpu.regs[1] = 4;
-        cpu.execute(Instruction::AddSpReg { rm: Register::R1 }, &mut ram)
-            .unwrap();
-        assert_eq!(36, cpu.sp);
-    }
-
-    #[test]
-    fn add_reg_sp_instruction() {
-        let i = Armv6M::decode(0b0100010001101001);
-        assert_eq!(Ok(Instruction::AddRegSp { rdm: Register::R1 }), i);
-        assert_eq!("ADD R1,SP", format!("{}", i.unwrap()));
-    }
-
-    #[test]
-    fn add_reg_sp_operation() {
-        let sp = 32;
-        let mut cpu = Armv6M::new(sp, 0x0);
-        let mut ram = [15; 8];
-        cpu.regs[1] = 4;
-        cpu.execute(Instruction::AddRegSp { rdm: Register::R1 }, &mut ram)
-            .unwrap();
-        assert_eq!(36, cpu.regs[1]);
     }
 
     #[test]
@@ -3934,6 +3928,36 @@ mod test {
         assert!(!cpu.is_v());
     }
     #[test]
+    fn add_reg_instruction() {
+        let i = Armv6M::decode(0b0100010010001111);
+        assert_eq!(
+            Ok(Instruction::AddReg {
+                rdn: Register::Pc,
+                rm: Register::R1,
+            }),
+            i
+        );
+        assert_eq!("ADD PC,R1", format!("{}", i.unwrap()));
+    }
+    #[test]
+    fn add_reg_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.regs[0] = 4;
+        cpu.regs[1] = 1;
+        cpu.execute(
+            Instruction::AddReg {
+                rdn: Register::R0,
+                rm: Register::R1,
+            },
+            &mut ram,
+        )
+        .unwrap();
+        assert_eq!(5, cpu.regs[0]);
+    }
+
+    #[test]
     fn adds_reg_instruction() {
         let i = Armv6M::decode(0b0001100001000000);
         assert_eq!(
@@ -4007,13 +4031,14 @@ mod test {
     fn adr_instruction() {
         let i = Armv6M::decode(0b1010000000000001);
         assert_eq!(
-            Ok(Instruction::Adr {
+            Ok(Instruction::AddRegImmReg {
                 rd: Register::R0,
+                rn: Register::Pc,
                 imm8x4: 4
             }),
             i
         );
-        assert_eq!("ADR R0,#4", format!("{}", i.unwrap()));
+        assert_eq!("ADD R0,PC,#4", format!("{}", i.unwrap()));
     }
     #[test]
     fn adr_operation() {
@@ -4022,8 +4047,9 @@ mod test {
         let mut ram = [0; 8];
         cpu.set_c(true);
         cpu.execute(
-            Instruction::Adr {
+            Instruction::AddRegImmReg {
                 rd: Register::R0,
+                rn: Register::Pc,
                 imm8x4: 4,
             },
             &mut ram,
@@ -4872,6 +4898,23 @@ mod test {
         let i = Armv6M::decode(0b1011011001100010);
         assert_eq!(Ok(Instruction::Cps { im: false }), i);
         assert_eq!("CPSIE i", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn svc_instruction() {
+        let i = Armv6M::decode(0b1101111111001101);
+        assert_eq!(Ok(Instruction::SupervisorCall { imm8: 0xCD }), i);
+        assert_eq!("SVC 0xcd", format!("{}", i.unwrap()));
+    }
+
+    #[test]
+    fn svc_operation() {
+        let sp = 16;
+        let mut cpu = Armv6M::new(sp, 0);
+        let mut ram = [0; 8];
+        cpu.execute(Instruction::SupervisorCall { imm8: 0xCD }, &mut ram)
+            .unwrap();
+        assert_eq!(Some(0xCD), cpu.supervisor());
     }
 }
 

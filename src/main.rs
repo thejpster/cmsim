@@ -5,8 +5,11 @@
 //!
 //! 1024 KiB of ROM at 0x0000_0000 and 1024 KiB of SRAM at 0x2000_0000 are simulated.
 
+// Copyright (c) 2023 Jonathan 'theJPster' Pallant
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::{io::prelude::*, sync::atomic::Ordering};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use cmsim::Memory;
 
@@ -35,18 +38,26 @@ impl cmsim::Memory for Region {
             .ok_or(cmsim::Error::InvalidAddress(addr))? = value;
         Ok(())
     }
+
+    fn len(&self) -> u32 {
+        (self.contents.len() * std::mem::size_of::<u32>()) as u32
+    }
 }
 
 /// Represents a basic UART, compatible with the one in QEMU
 ///
-/// Writes to standard out and reads from stdin.
-#[derive(Debug)]
+/// Writes to anything boxed and writable, optionally reads from a channel.
 struct Uart {
+    /// The last value written to the baud register
     baud: u32,
+    /// The last value written to the control register
     control: u32,
-    stream_out: std::net::TcpStream,
+    /// A place we can write bytes to
+    stream_out: Box<dyn std::io::Write>,
+    /// Acts as a 1-byte buffer, where the top bit is "buffer has data"
     buffer: std::sync::atomic::AtomicU32,
-    stream_in: std::sync::mpsc::Receiver<u8>,
+    /// A place we can read bytes from
+    stream_in: Option<std::sync::mpsc::Receiver<u8>>,
 }
 
 impl cmsim::Memory for Uart {
@@ -59,7 +70,8 @@ impl cmsim::Memory for Uart {
                     self.buffer.store(0, Ordering::Relaxed);
                     Ok(buffered & 0xFF)
                 } else {
-                    let b = self.stream_in.recv().unwrap();
+                    // Reading when status told you not to will cause a panic
+                    let b = self.stream_in.as_ref().unwrap().recv().unwrap();
                     Ok(u32::from(b))
                 }
             }
@@ -68,15 +80,18 @@ impl cmsim::Memory for Uart {
                 let buffered = self.buffer.load(Ordering::Relaxed);
                 if buffered == 0 {
                     // Nothing buffered
-                    match self.stream_in.try_recv() {
-                        Ok(b) => {
+                    match self.stream_in.as_ref().map(|s| s.try_recv()) {
+                        None => {
+                            // No input so buffer empty
+                        }
+                        Some(Ok(b)) => {
                             self.buffer
                                 .store(0x80000000 | u32::from(b), Ordering::Relaxed);
                         }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
                             // Buffer empty
                         }
-                        Err(_e) => {
+                        Some(Err(_e)) => {
                             panic!("Unexpected disconnect on stream thread");
                         }
                     }
@@ -112,83 +127,161 @@ impl cmsim::Memory for Uart {
         }
         Ok(())
     }
+
+    fn len(&self) -> u32 {
+        // five registers
+        (5 * std::mem::size_of::<u32>()) as u32
+    }
 }
 
 struct System {
-    /// Flash at 0x0000_0000
+    /// Flash ROM
     flash: Region,
+    /// Where Flash ROM starts
+    flash_start: u32,
     /// SRAM at 0x2000_0000
     ram: Region,
+    /// Where RAM starts
+    ram_start: u32,
     /// UART at 0x5930_3000
     uart: Uart,
+    /// Where UART starts
+    uart_start: u32,
 }
 
 impl cmsim::Memory for System {
     fn load_u32(&self, addr: u32) -> Result<u32, cmsim::Error> {
-        if addr < 0x2000_0000 {
-            self.flash.load_u32(addr)
-        } else if (0x5930_3000..0x5930_3100).contains(&addr) {
-            self.uart.load_u32(addr - 0x5930_3000)
+        if addr >= self.flash_start && addr <= self.flash_start + self.flash.len() {
+            self.flash.load_u32(addr - self.flash_start)
+        } else if addr >= self.uart_start && addr <= self.uart_start + self.uart.len() {
+            self.uart.load_u32(addr - self.uart_start)
+        } else if addr >= self.ram_start && addr <= self.ram_start + self.ram.len() {
+            self.ram.load_u32(addr - self.ram_start)
         } else {
-            self.ram.load_u32(addr - 0x2000_0000)
+            Err(cmsim::Error::InvalidAddress(addr))
         }
     }
 
     fn store_u32(&mut self, addr: u32, value: u32) -> Result<(), cmsim::Error> {
-        if addr < 0x2000_0000 {
-            Err(cmsim::Error::InvalidAddress(addr))
-        } else if (0x5930_3000..0x5930_3100).contains(&addr) {
-            self.uart.store_u32(addr - 0x5930_3000, value)
+        if addr >= self.flash_start && addr <= self.flash_start + self.flash.len() {
+            self.flash.store_u32(addr - self.flash_start, value)
+        } else if addr >= self.uart_start && addr <= self.uart_start + self.uart.len() {
+            self.uart.store_u32(addr - self.uart_start, value)
+        } else if addr >= self.ram_start && addr <= self.ram_start + self.ram.len() {
+            self.ram.store_u32(addr - self.ram_start, value)
         } else {
-            self.ram.store_u32(addr - 0x2000_0000, value)
+            Err(cmsim::Error::InvalidAddress(addr))
         }
+    }
+
+    fn len(&self) -> u32 {
+        0
     }
 }
 
 fn main() -> Result<(), std::io::Error> {
     tracing_subscriber::fmt::fmt()
-        .with_writer(std::io::stderr)
-        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(std::io::stdout)
+        .with_max_level(tracing::Level::INFO)
         .init();
 
     let binary_name = std::env::args().nth(1).unwrap();
+    let output_file = std::env::args().nth(2);
     let contents = std::fs::read(binary_name).unwrap();
 
-    let tcp_listener = std::net::TcpListener::bind("127.0.0.1:8000")?;
-    info!(
-        "Listening on {}. Connect now!",
-        tcp_listener.local_addr().unwrap()
-    );
+    let elf = neotron_loader::Loader::new(contents.as_slice()).expect("Valid ELF file");
 
-    let (stream, addr) = tcp_listener.accept().expect("Incoming connection");
-    info!("{addr} connected, starting...");
-
-    let (tx_chan, rx_chan) = std::sync::mpsc::channel();
-    let mut rx_stream = stream.try_clone().unwrap();
-    std::thread::spawn(move || loop {
-        let mut buffer = [0u8; 1];
-        rx_stream.read_exact(&mut buffer).unwrap();
-        tx_chan.send(buffer[0]).unwrap();
-    });
+    let uart = if let Some(name) = output_file {
+        let f = std::fs::File::create(name).expect("Create output file");
+        Uart {
+            baud: 0,
+            control: 0,
+            stream_out: Box::new(f),
+            buffer: std::sync::atomic::AtomicU32::new(0),
+            stream_in: None,
+        }
+    } else {
+        let tcp_listener = std::net::TcpListener::bind("127.0.0.1:8000")?;
+        info!(
+            "Listening on {}. Connect now!",
+            tcp_listener.local_addr().unwrap()
+        );
+        let (stream, addr) = tcp_listener.accept().expect("Incoming connection");
+        info!("{addr} connected, starting...");
+        let (tx_chan, rx_chan) = std::sync::mpsc::channel();
+        let mut rx_stream = stream.try_clone().unwrap();
+        std::thread::spawn(move || loop {
+            let mut buffer = [0u8; 1];
+            rx_stream.read_exact(&mut buffer).unwrap();
+            tx_chan.send(buffer[0]).unwrap();
+        });
+        Uart {
+            baud: 0,
+            control: 0,
+            stream_out: Box::new(stream),
+            buffer: std::sync::atomic::AtomicU32::new(0),
+            stream_in: Some(rx_chan),
+        }
+    };
 
     let mut system = System {
         flash: Region {
             contents: vec![0u32; 256 * 1024].into(),
         },
+        flash_start: 0,
         ram: Region {
             contents: vec![0u32; 256 * 1024].into(),
         },
-        uart: Uart {
-            baud: 0,
-            control: 0,
-            stream_out: stream,
-            buffer: std::sync::atomic::AtomicU32::new(0),
-            stream_in: rx_chan,
-        },
+        ram_start: 0x2000_0000,
+        uart,
+        uart_start: 0x5930_3000,
     };
 
-    for (idx, b) in contents.iter().enumerate() {
-        system.flash.store_u8(idx as u32, *b).unwrap();
+    let mut iter = elf.iter_program_headers();
+    while let Some(Ok(ph)) = iter.next() {
+        if ph.p_vaddr() >= system.flash_start
+            && ph.p_vaddr() <= system.flash_start + system.flash.len()
+            && ph.p_type() == neotron_loader::ProgramHeader::PT_LOAD
+        {
+            let flash_offset = ph.p_vaddr() - system.flash_start;
+            info!(
+                "Loading {} bytes to 0x{:08x} (Flash)",
+                ph.p_memsz(),
+                ph.p_vaddr()
+            );
+            let elf_addr = ph.p_offset();
+            for byte_idx in 0..ph.p_filesz() {
+                system
+                    .flash
+                    .store_u8(
+                        flash_offset + byte_idx,
+                        contents[(elf_addr + byte_idx) as usize],
+                    )
+                    .unwrap();
+            }
+        } else if ph.p_vaddr() >= system.ram_start
+            && ph.p_vaddr() <= system.ram_start + system.ram.len()
+            && ph.p_type() == neotron_loader::ProgramHeader::PT_LOAD
+        {
+            let ram_offset = ph.p_vaddr() - system.ram_start;
+            info!(
+                "Loading {} bytes to 0x{:08x} (RAM)",
+                ph.p_memsz(),
+                ph.p_vaddr()
+            );
+            let elf_addr = ph.p_offset();
+            for byte_idx in 0..ph.p_filesz() {
+                system
+                    .ram
+                    .store_u8(
+                        ram_offset + byte_idx,
+                        contents[(elf_addr + byte_idx) as usize],
+                    )
+                    .unwrap();
+            }
+        } else {
+            warn!("Ignoring program header {:?}", ph);
+        }
     }
 
     let sp = system.flash.load_u32(0).unwrap();

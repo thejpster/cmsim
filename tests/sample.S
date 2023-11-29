@@ -1,3 +1,7 @@
+// Sample ARMv6-M assembly program to test cmsim
+// Copyright (c) 2023 Jonathan 'theJPster' Pallant
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 .syntax unified
 .thumb
 .cpu cortex-m0plus
@@ -11,7 +15,7 @@
 
 .data
 .section .vector_table.reset_vector
-.word _start + 1
+.word _start
 .section .vector_table.exceptions
 .word 0xEEEEEE00
 .word 0xEEEEEE01
@@ -23,7 +27,7 @@
 // Program Code
 
 .text
-.section .text
+.thumb_func
 _start:
     // setup
     bl init
@@ -77,7 +81,7 @@ init:
 
 // Mutable Global Variables
 
-.section .data
+.data
 
 some_global:
     .word 0xDEADBEEF
