@@ -3,6 +3,9 @@
 //! Designed to run on `no_std` systems (although at the moment it's full of
 //! println! calls).
 
+// Copyright (c) 2023 Jonathan 'theJPster' Pallant
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
 
@@ -1125,7 +1128,7 @@ impl std::fmt::Display for Instruction {
             Instruction::Stmia { rn, register_list } => {
                 write!(f, "STMIA {}!,{{{}}}", rn, register_list)
             }
-           Instruction::AddSpImm { imm7x4 } => {
+            Instruction::AddSpImm { imm7x4 } => {
                 write!(f, "ADD SP,#{imm7x4}",)
             }
             Instruction::SubSpImm { imm7x4 } => {

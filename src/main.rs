@@ -5,6 +5,9 @@
 //!
 //! 1024 KiB of ROM at 0x0000_0000 and 1024 KiB of SRAM at 0x2000_0000 are simulated.
 
+// Copyright (c) 2023 Jonathan 'theJPster' Pallant
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::{io::prelude::*, sync::atomic::Ordering};
 use tracing::{error, info, warn};
 

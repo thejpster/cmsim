@@ -1,3 +1,7 @@
+// Sample ARMv6-M assembly program to test cmsim
+// Copyright (c) 2023 Jonathan 'theJPster' Pallant
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 .syntax unified
 .thumb
 .cpu cortex-m0plus
